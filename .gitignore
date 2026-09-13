@@ -35,6 +35,8 @@ Downloaded/
 Transcripts/
 dy_downloader.db
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
 

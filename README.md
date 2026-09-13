@@ -34,6 +34,29 @@ A desktop GUI built on the same backend, with dedicated workspaces for Douyin, T
 
 _Screenshots were captured from the current desktop `main` build. Demonstration data is used for privacy._
 
+## Web Console
+
+The project ships a single-file web console (`web/index.html`) served by the REST API mode. Configure downloads, watch jobs, run discovery, and browse your archive from a browser at `http://127.0.0.1:8000/`.
+
+```bash
+pip install fastapi uvicorn        # one-time optional dependency
+python run.py --serve --serve-port 8000
+```
+
+| Tab | What it does |
+|-----|--------------|
+| Overview | Service health, cookie status, runtime parameters, job breakdown, top authors (30 days), **one-click open / copy the download folder** |
+| Download | Batch-submit links — **paste the whole share message straight from the app**, the URL inside is extracted automatically; mode (post/like/mix/music/collect/collectmix), count, quality, time range, content toggles, comments, transcription — all scoped to **this submission only**, never written to config |
+| Jobs | Live **progress bars** (processed/total plus per-file byte progress), phase and current item, pause / resume / cancel / retry / **delete one** / **clear finished**, output folders with **open / copy path** |
+| Discovery | Hot-search board and keyword search, exported as JSONL snapshots |
+| Archive | `download_manifest.jsonl` browser plus paginated SQLite history with author/title/type filters |
+| Settings | Edit and save `config.yml` in place (credentials are never sent to the browser) |
+
+> Downloads run asynchronously in the background: after submitting, the page jumps to Jobs so you can watch progress, pause, or cancel.
+> Pause is **cooperative** — an in-flight file transfer cannot be interrupted (streaming downloads bypass the rate limiter), so it takes effect "after the current item finishes, before the next request". For batch jobs like an author profile that means pausing item by item.
+>
+> The console is fully offline-capable with no CDN dependency. For split deployments, set the server URL in the header's API field.
+
 ## Feature Overview
 
 ### Supported
@@ -343,9 +366,26 @@ Endpoints:
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/download` | Submit `{"url": "..."}`, returns `{job_id, status}` |
-| GET | `/api/v1/jobs/{job_id}` | Get a specific job's status/counts |
+| GET | `/` | Web console (`web/index.html`) |
+| POST | `/api/v1/download` | Submit `{"url": "...", "overrides": {...}}`, returns `{job_id, status}`; `overrides` scopes mode/number/quality/time range per link |
+| GET | `/api/v1/jobs/{job_id}` | Get a job's status, counts, and live progress (step/detail/processed/current byte progress/output_dirs) |
 | GET | `/api/v1/jobs` | List recent jobs (TTL + capacity capped) |
+| POST | `/api/v1/jobs/{job_id}/retry` | Re-queue a job with its original url and overrides |
+| POST | `/api/v1/jobs/{job_id}/pause` | Pause a job (stops after the current item, before the next request) |
+| POST | `/api/v1/jobs/{job_id}/resume` | Resume a paused job |
+| POST | `/api/v1/jobs/{job_id}/cancel` | Cancel a queued or running job (already-downloaded files are kept) |
+| DELETE | `/api/v1/jobs/{job_id}` | Delete one job record (active ones are cancelled first; disk files are kept) |
+| DELETE | `/api/v1/jobs` | Clear jobs, terminal ones only by default; `?include_active=true` also clears running ones |
+| GET | `/api/v1/config` | Read config (cookies / api_key redacted) |
+| PUT | `/api/v1/config` | Persist whitelisted keys to `config.yml` and hot-reload concurrency/rate-limit/retry |
+| GET | `/api/v1/cookies/status` | Cookie presence and validity (never the values) |
+| GET | `/api/v1/stats` | Version, job breakdown, runtime parameters, archive total, top authors |
+| GET | `/api/v1/history` | Paginated SQLite history with `author` / `title` / `aweme_type` filters |
+| GET | `/api/v1/manifest` | Tail of `download_manifest.jsonl` |
+| GET | `/api/v1/download-dir` | Absolute download root and whether it exists |
+| POST | `/api/v1/open-folder` | Open the download root or a subdirectory in the OS file manager (**restricted to paths inside the download root**, 403 otherwise) |
+| GET | `/api/v1/discovery/hot-board` | Fetch the hot-search board to JSONL |
+| GET | `/api/v1/discovery/search` | Keyword search to JSONL |
 | GET | `/api/v1/health` | Health probe |
 
 Finished jobs are pruned by TTL (default 24h) and max-jobs (default 500) — in-flight jobs are never pruned. Configure via `server.max_jobs` / `server.job_ttl_seconds`.

@@ -26,10 +26,12 @@ A Python-based Douyin (TikTok China) batch downloader that fetches videos, galle
 | `config/` | YAML config loading, env var overrides, defaults (see `config/AGENTS.md`) |
 | `control/` | Concurrency control — rate limiter, retry handler, queue manager (see `control/AGENTS.md`) |
 | `core/` | Business logic — API client, URL parser, downloaders, strategy pattern (see `core/AGENTS.md`) |
+| `server/` | FastAPI REST API + optional web console host (`app.py`, `jobs.py`, `progress.py`). Serves `web/index.html` and exposes config / history / stats / discovery endpoints plus per-job pause/resume/cancel. `progress.py` bridges `core`'s progress callbacks into the job object; `jobs.py` sets `CURRENT_JOB` (ContextVar) so the executor can find its job without changing its signature. CLI-only; the desktop sibling ships a richer server. |
 | `storage/` | SQLite database, file management, metadata handling (see `storage/AGENTS.md`) |
 | `tests/` | Pytest test suite with 23 test modules (see `tests/AGENTS.md`) |
 | `tools/` | Standalone utilities like browser-based cookie fetching (see `tools/AGENTS.md`) |
 | `utils/` | Shared helpers — logging, validation, anti-bot signatures (see `utils/AGENTS.md`) |
+| `web/` | Single-file web console (`index.html`) — offline, no CDN, vanilla JS. Talks to `server/app.py` over `/api/v1/*`. Not a Python package; served via `FileResponse`. |
 
 ## For AI Agents
 

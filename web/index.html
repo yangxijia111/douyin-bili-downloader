@@ -1,0 +1,1508 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>抖音下载器 · 可视化控制台</title>
+<style>
+:root{
+  --bg:#0e1116; --bg2:#151a22; --bg3:#1b212b; --bg4:#222a36;
+  --border:#28303d; --border2:#38424f;
+  --text:#e6eaf2; --muted:#8b95a7; --dim:#5f6a7d;
+  --accent:#4c8dff; --accent2:#2f6fe0;
+  --ok:#3fb950; --warn:#d29922; --err:#f85149; --info:#58a6ff;
+  --radius:10px; --radius-lg:14px;
+  --mono:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;height:100%}
+body{
+  background:var(--bg); color:var(--text); font-size:14px; line-height:1.55;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+}
+button,input,select,textarea{font-family:inherit;font-size:13px;color:var(--text)}
+a{color:var(--info);text-decoration:none}
+a:hover{text-decoration:underline}
+
+.layout{display:flex;min-height:100vh}
+.sidebar{
+  width:212px;flex:0 0 212px;background:var(--bg2);border-right:1px solid var(--border);
+  display:flex;flex-direction:column;position:sticky;top:0;height:100vh
+}
+.brand{padding:18px 18px 14px;border-bottom:1px solid var(--border)}
+.brand h1{margin:0;font-size:15px;font-weight:600;letter-spacing:.2px}
+.brand p{margin:4px 0 0;font-size:11px;color:var(--dim)}
+.nav{padding:10px 8px;flex:1;overflow:auto}
+.nav button{
+  display:flex;align-items:center;gap:9px;width:100%;padding:9px 11px;margin-bottom:2px;
+  background:transparent;border:0;border-radius:8px;cursor:pointer;text-align:left;
+  color:var(--muted);font-size:13px;transition:background .12s,color .12s
+}
+.nav button:hover{background:var(--bg3);color:var(--text)}
+.nav button.active{background:var(--accent);color:#fff;font-weight:500}
+.nav .glyph{width:15px;height:15px;flex:0 0 15px;display:inline-block}
+.side-foot{padding:10px 14px;border-top:1px solid var(--border);font-size:11px;color:var(--dim)}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--dim);margin-right:6px;vertical-align:middle}
+.dot.on{background:var(--ok)}.dot.off{background:var(--err)}
+
+.main{flex:1;min-width:0;display:flex;flex-direction:column}
+.topbar{
+  display:flex;align-items:center;gap:12px;padding:12px 22px;border-bottom:1px solid var(--border);
+  background:var(--bg2);position:sticky;top:0;z-index:20;flex-wrap:wrap
+}
+.topbar h2{margin:0;font-size:15px;font-weight:600}
+.topbar .sub{color:var(--dim);font-size:12px}
+.topbar .spacer{flex:1}
+.content{padding:22px;max-width:1280px;width:100%}
+
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-lg);padding:18px;margin-bottom:16px}
+.card>h3{margin:0 0 4px;font-size:14px;font-weight:600}
+.card>p.hint{margin:0 0 14px;font-size:12px;color:var(--muted)}
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+.g3{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+.g4{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
+
+.stat{background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px}
+.stat .k{font-size:12px;color:var(--muted);margin-bottom:6px}
+.stat .v{font-size:22px;font-weight:600;line-height:1.2}
+.stat .v.sm{font-size:14px;font-weight:500;word-break:break-all;font-family:var(--mono)}
+.stat.ok .v{color:var(--ok)}.stat.err .v{color:var(--err)}.stat.warn .v{color:var(--warn)}
+
+label.field{display:block;margin-bottom:12px}
+label.field>span{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}
+input[type=text],input[type=number],input[type=date],select,textarea{
+  width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;
+  padding:8px 10px;outline:none
+}
+input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+textarea{resize:vertical;font-family:var(--mono);line-height:1.6}
+input[type=number]{font-family:var(--mono)}
+.sw{display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;padding:4px 0}
+.sw input{appearance:none;width:34px;height:19px;border-radius:19px;background:var(--bg4);
+  border:1px solid var(--border2);position:relative;cursor:pointer;transition:background .15s;flex:0 0 34px}
+.sw input::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;
+  background:var(--muted);transition:transform .15s,background .15s}
+.sw input:checked{background:var(--accent2);border-color:var(--accent)}
+.sw input:checked::after{transform:translateX(15px);background:#fff}
+.sw span{font-size:13px}
+
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.chip{background:var(--bg3);border:1px solid var(--border);border-radius:999px;padding:6px 13px;
+  cursor:pointer;font-size:12px;color:var(--muted);transition:all .12s}
+.chip:hover{border-color:var(--border2);color:var(--text)}
+.chip.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:500}
+
+button.btn{background:var(--accent);border:1px solid var(--accent);color:#fff;border-radius:8px;
+  padding:8px 16px;cursor:pointer;font-weight:500}
+button.btn:hover{background:var(--accent2)}
+button.btn:disabled{opacity:.5;cursor:not-allowed}
+button.ghost{background:var(--bg3);border:1px solid var(--border2);color:var(--text)}
+button.ghost:hover{background:var(--bg4)}
+button.mini{padding:3px 9px;font-size:12px;border-radius:6px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;color:var(--muted);font-weight:500;padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+tr:last-child td{border-bottom:0}
+tbody tr:hover{background:var(--bg3)}
+.tbl-wrap{overflow-x:auto;margin:0 -4px}
+.mono{font-family:var(--mono);font-size:11.5px}
+.ellip{max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:bottom}
+
+.badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:500;white-space:nowrap}
+.b-pending{background:rgba(139,149,167,.16);color:var(--muted)}
+.b-running{background:rgba(88,166,255,.16);color:var(--info)}
+.b-success{background:rgba(63,185,80,.16);color:var(--ok)}
+.b-failed{background:rgba(248,81,73,.16);color:var(--err)}
+.b-cancelled{background:rgba(210,153,34,.16);color:var(--warn)}
+.b-paused{background:rgba(210,153,34,.16);color:var(--warn)}
+
+.jobcard{background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:10px}
+.jobcard .top{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:4px}
+.jobcard .url{font-family:var(--mono);font-size:11.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:120px}
+.jobcard .acts{display:flex;gap:6px;flex-wrap:wrap}
+.bar{height:8px;border-radius:999px;background:var(--bg);border:1px solid var(--border);overflow:hidden;margin:9px 0}
+.bar>i{display:block;height:100%;background:var(--accent);transition:width .3s ease}
+.bar.ok>i{background:var(--ok)}
+.bar.err>i{background:var(--err)}
+.bar.indet>i{width:34%;animation:slide 1.5s ease-in-out infinite}
+@keyframes slide{0%{margin-left:0}50%{margin-left:66%}100%{margin-left:0}}
+.jobcard .meta{font-size:12px;color:var(--muted);display:flex;gap:14px;flex-wrap:wrap}
+.jobcard .meta b{color:var(--text);font-weight:500}
+.jobcard .line{font-size:12.5px;margin-top:6px;color:var(--text)}
+.jobcard .sub{font-size:11.5px;color:var(--dim);font-family:var(--mono);margin-top:4px;word-break:break-all}
+
+
+.empty{text-align:center;color:var(--dim);padding:34px 10px;font-size:13px}
+.toasts{position:fixed;right:18px;bottom:18px;display:flex;flex-direction:column;gap:8px;z-index:99}
+.toast{background:var(--bg4);border:1px solid var(--border2);border-left:3px solid var(--accent);
+  border-radius:8px;padding:10px 14px;font-size:13px;max-width:380px;box-shadow:0 6px 22px rgba(0,0,0,.45)}
+.toast.ok{border-left-color:var(--ok)}.toast.err{border-left-color:var(--err)}.toast.warn{border-left-color:var(--warn)}
+.pager{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:12px;font-size:12px;color:var(--muted)}
+.code{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px 12px;
+  font-family:var(--mono);font-size:12px;overflow-x:auto;white-space:pre;color:var(--muted)}
+.sec-title{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin:20px 0 10px}
+.sec-title:first-child{margin-top:0}
+.panel{display:none}.panel.active{display:block}
+.kv{display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px dashed var(--border);font-size:12.5px}
+.kv:last-child{border-bottom:0}
+.kv .k{color:var(--muted)}.kv .v{font-family:var(--mono);font-size:11.5px;text-align:right;word-break:break-all}
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand">
+      <h1>抖音下载器 · 控制台</h1>
+      <p id="brandSub">正在连接服务…</p>
+    </div>
+    <nav class="nav" id="nav">
+      <button data-tab="overview" class="active"><svg class="glyph" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="1" width="6" height="6" rx="1.5"/><rect x="9" y="1" width="6" height="6" rx="1.5"/><rect x="1" y="9" width="6" height="6" rx="1.5"/><rect x="9" y="9" width="6" height="6" rx="1.5"/></svg>总览</button>
+      <button data-tab="download"><svg class="glyph" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1v8.6L4.7 6.3 3.3 7.7 8 12.4l4.7-4.7-1.4-1.4L8 9.6V1H8z"/><rect x="2" y="13" width="12" height="2" rx="1"/></svg>链接下载</button>
+      <button data-tab="jobs"><svg class="glyph" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="3" width="14" height="2.6" rx="1.3"/><rect x="1" y="7.5" width="14" height="2.6" rx="1.3"/><rect x="1" y="12" width="9" height="2.6" rx="1.3"/></svg>任务中心</button>
+      <button data-tab="discovery"><svg class="glyph" viewBox="0 0 16 16" fill="currentColor"><path d="M7 1a6 6 0 1 0 3.7 10.7l3.3 3.3 1.4-1.4-3.3-3.3A6 6 0 0 0 7 1zm0 2a4 4 0 1 1 0 8 4 4 0 0 1 0-8z"/></svg>数据发现</button>
+      <button data-tab="archive"><svg class="glyph" viewBox="0 0 16 16" fill="currentColor"><path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h11A1.5 1.5 0 0 1 15 3.5V5H1V3.5zM1 6.5h14v6A1.5 1.5 0 0 1 13.5 14h-11A1.5 1.5 0 0 1 1 12.5v-6zm4 2v1.5h6V8.5H5z"/></svg>下载档案</button>
+      <button data-tab="settings"><svg class="glyph" viewBox="0 0 16 16" fill="currentColor"><path d="M8 5.2A2.8 2.8 0 1 0 8 10.8 2.8 2.8 0 0 0 8 5.2zm0 1.6a1.2 1.2 0 1 1 0 2.4 1.2 1.2 0 0 1 0-2.4z"/><path d="M7.1 1h1.8l.3 1.7 1.3.5 1.4-1 1.3 1.3-1 1.4.5 1.3 1.7.3v1.8l-1.7.3-.5 1.3 1 1.4-1.3 1.3-1.4-1-1.3.5-.3 1.7H7.1l-.3-1.7-1.3-.5-1.4 1L2.8 12l1-1.4-.5-1.3L1.6 9V7.2l1.7-.3.5-1.3-1-1.4L4.1 2.9l1.4 1 1.3-.5L7.1 1z"/></svg>配置中心</button>
+      <button data-tab="about"><svg class="glyph" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 2.6a1.1 1.1 0 1 1 0 2.2 1.1 1.1 0 0 1 0-2.2zM6.6 7h2.2v5.4H6.6V7z"/></svg>关于</button>
+    </nav>
+    <div class="side-foot">
+      <div><span class="dot" id="connDot"></span><span id="connText">未连接</span></div>
+      <div style="margin-top:6px" id="verText">—</div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <div class="topbar">
+      <h2 id="pageTitle">总览</h2>
+      <span class="sub" id="pageSub"></span>
+      <span class="spacer"></span>
+      <input type="text" id="apiBase" placeholder="API 地址（默认同源）" style="width:230px">
+      <button class="btn ghost mini" id="btnPing">测试连接</button>
+    </div>
+    <div class="content">
+
+      <!-- 总览 -->
+      <section class="panel active" id="panel-overview">
+        <div class="grid g4" style="margin-bottom:16px">
+          <div class="stat"><div class="k">服务状态</div><div class="v" id="sHealth">—</div></div>
+          <div class="stat"><div class="k">Cookie 状态</div><div class="v" id="sCookie">—</div></div>
+          <div class="stat"><div class="k">任务总数</div><div class="v" id="sJobs">—</div></div>
+          <div class="stat"><div class="k">档案作品数</div><div class="v" id="sArchive">—</div></div>
+        </div>
+        <div class="grid g2">
+          <div class="card">
+            <h3>运行参数</h3>
+            <p class="hint">来自 config.yml 的当前生效值</p>
+            <div id="ovRuntime"></div>
+          </div>
+          <div class="card">
+            <h3>任务分布</h3>
+            <p class="hint">本进程内任务的实时状态统计</p>
+            <div id="ovJobs"></div>
+          </div>
+        </div>
+        <div class="card">
+          <h3>下载目录</h3>
+          <p class="hint">视频保存在本机的这个文件夹里。浏览器不能直接打开本地目录，所以由本机服务端代开；打不开时可复制路径自己粘贴到资源管理器。</p>
+          <div class="kv"><span class="k">绝对路径</span><span class="v" id="ovDirPath">—</span></div>
+          <div class="row" style="margin-top:12px">
+            <button class="btn" id="ovOpenDir">打开文件夹</button>
+            <button class="btn ghost" id="ovCopyDir">复制路径</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>近 30 天热门作者</h3>
+          <p class="hint">按已下载作品数量聚合（依赖 database 与 author_sec_uid）</p>
+          <div class="tbl-wrap" id="ovAuthors"></div>
+        </div>
+        <div class="card">
+          <h3>服务端信息</h3>
+          <div id="ovServer"></div>
+        </div>
+      </section>
+
+      <!-- 链接下载 -->
+      <section class="panel" id="panel-download">
+        <div class="card">
+          <h3>下载链接</h3>
+          <p class="hint">每行一个链接，也<b>可以直接粘贴抖音 App 的整条分享文案</b>——会自动提取其中的链接并忽略多余文字。支持 <b>作者主页批量下载</b>、视频 / 图文 / 合集 / 音乐 / 收藏夹 / 直播间，短链会自动解析。</p>
+          <textarea id="dlLinks" rows="6" placeholder="作者主页（批量下载该博主作品）：&#10;https://www.douyin.com/user/MS4wLjABAAAA6O7EZyfDRYXxJrUTpf91K3tmB4rBROkAw-nYMfld8ss&#10;&#10;单条作品：&#10;https://www.douyin.com/video/7604129988555574538"></textarea>
+          <div class="row" style="margin-top:10px">
+            <button class="btn ghost mini" id="dlDemoAuthor">示例 · 作者主页批量</button>
+            <button class="btn ghost mini" id="dlDemo">示例 · 单条视频</button>
+            <button class="btn ghost mini" id="dlClear">清空</button>
+            <span class="sub" id="dlCount" style="color:var(--dim);font-size:12px">识别到 0 条链接</span>
+          </div>
+          <div id="dlDetect" style="margin-top:12px"></div>
+        </div>
+
+        <div class="card">
+          <h3>批量下载范围（作者主页 / 收藏夹链接需要）</h3>
+          <p class="hint">仅对本次提交生效，不写入配置文件。单条视频 / 图文 / 合集 / 音乐 / 直播间链接不需要在这里选择。</p>
+          <div class="sec-title">要批量下载作者主页的哪些内容（mode）</div>
+          <div class="chips" id="dlModes"></div>
+          <div id="dlNotice" style="font-size:12px;color:var(--warn);margin-bottom:12px"></div>
+          <div class="grid g4" id="dlNumbers"></div>
+          <div class="row" id="dlQuick" style="margin:2px 0 14px"></div>
+          <div class="grid g3" style="margin-top:4px">
+            <label class="field"><span>下载画质（video_quality）</span>
+              <select id="dlQuality"></select></label>
+            <label class="field"><span>起始日期（start_time）</span><input type="date" id="dlStart"></label>
+            <label class="field"><span>结束日期（end_time）</span><input type="date" id="dlEnd"></label>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>下载内容</h3>
+          <p class="hint">默认只保存视频本体，附带产物按需开启（每多一项就多一份请求与文件）。</p>
+          <div class="grid g4" id="dlContent"></div>
+          <div class="sec-title">评论采集</div>
+          <div class="grid g3">
+            <label class="sw"><input type="checkbox" id="dlComments"><span>采集作品评论</span></label>
+            <label class="sw"><input type="checkbox" id="dlCommentsReplies"><span>包含二级回复</span></label>
+            <label class="field" style="margin:0"><span>评论上限（0 = 不限）</span>
+              <input type="number" id="dlCommentsMax" min="0" value="500"></label>
+          </div>
+          <div class="sec-title">视频转写</div>
+          <div class="sw"><label class="sw" style="margin:0"><input type="checkbox" id="dlTranscript"><span>下载后调用 OpenAI 转写（需在配置中心填好密钥环境变量）</span></label></div>
+        </div>
+
+        <div class="row">
+          <button class="btn" id="dlSubmit">提交下载任务</button>
+          <button class="btn ghost" id="dlPreview">预览提交参数</button>
+        </div>
+        <div id="dlResult" style="margin-top:16px"></div>
+      </section>
+
+      <!-- 任务中心 -->
+      <section class="panel" id="panel-jobs">
+        <div class="card">
+          <div class="row" style="margin-bottom:14px">
+            <button class="btn ghost mini" id="jobRefresh">立即刷新</button>
+            <button class="btn ghost mini" id="jobClear">清空已结束</button>
+            <label class="sw" style="margin:0"><input type="checkbox" id="jobAuto" checked><span>自动刷新（1.5 秒）</span></label>
+            <span class="spacer" style="flex:1"></span>
+            <span id="jobSummary" style="font-size:12px;color:var(--muted)"></span>
+          </div>
+          <div id="jobList"></div>
+        </div>
+      </section>
+
+      <!-- 数据发现 -->
+      <section class="panel" id="panel-discovery">
+        <div class="card">
+          <h3>抖音热搜榜</h3>
+          <p class="hint">抓取当前热搜词条并导出为 JSONL 快照（保存在 下载目录/hot_board/）。</p>
+          <div class="row">
+            <label class="field" style="margin:0;width:150px"><span>取前 N 条（0 = 全部）</span>
+              <input type="number" id="hotLimit" min="0" value="30"></label>
+            <button class="btn" id="hotRun" style="align-self:flex-end">抓取热搜榜</button>
+          </div>
+          <div id="hotResult" style="margin-top:14px"></div>
+        </div>
+        <div class="card">
+          <h3>关键词搜索</h3>
+          <p class="hint">按关键词搜索作品并导出 JSONL（保存在 下载目录/search/）。结果可复制链接回到「链接下载」。</p>
+          <div class="row">
+            <label class="field" style="margin:0;flex:1;min-width:200px"><span>关键词</span>
+              <input type="text" id="searchKeyword" placeholder="例如：猫咪"></label>
+            <label class="field" style="margin:0;width:170px"><span>最多条数</span>
+              <input type="number" id="searchMax" min="1" max="500" value="50"></label>
+            <button class="btn" id="searchRun" style="align-self:flex-end">开始搜索</button>
+          </div>
+          <div id="searchResult" style="margin-top:14px"></div>
+        </div>
+      </section>
+
+      <!-- 下载档案 -->
+      <section class="panel" id="panel-archive">
+        <div class="card">
+          <h3>下载清单（manifest）</h3>
+          <p class="hint">download_manifest.jsonl 的最近记录，含日期 / 标题 / 作者 / 标签 / 文件路径。</p>
+          <div class="row">
+            <label class="field" style="margin:0;width:150px"><span>显示条数</span>
+              <input type="number" id="mfLimit" min="1" max="1000" value="50"></label>
+            <button class="btn" id="mfRun" style="align-self:flex-end">读取清单</button>
+          </div>
+          <div id="mfResult" style="margin-top:14px"></div>
+        </div>
+        <div class="card">
+          <h3>历史数据库</h3>
+          <p class="hint">来自 SQLite（dy_downloader.db）的作品下载历史。</p>
+          <div class="grid g4">
+            <label class="field" style="margin:0"><span>作者筛选</span><input type="text" id="arAuthor"></label>
+            <label class="field" style="margin:0"><span>标题筛选</span><input type="text" id="arTitle"></label>
+            <label class="field" style="margin:0"><span>类型</span>
+              <select id="arType"><option value="">全部</option><option value="video">视频</option><option value="gallery">图文</option></select></label>
+            <label class="field" style="margin:0"><span>每页条数</span><input type="number" id="arSize" min="1" max="200" value="20"></label>
+          </div>
+          <div class="row" style="margin-top:12px"><button class="btn" id="arRun">查询</button></div>
+          <div id="arResult" style="margin-top:14px"></div>
+        </div>
+      </section>
+
+      <!-- 配置中心 -->
+      <section class="panel" id="panel-settings">
+        <div class="card">
+          <div class="row">
+            <div>
+              <h3 style="margin:0">配置文件</h3>
+              <p class="hint" style="margin:4px 0 0">修改会同时作用于当前进程并写回 config.yml（凭据字段不可通过网页修改）。</p>
+            </div>
+            <span class="spacer" style="flex:1"></span>
+            <button class="btn ghost mini" id="cfgReload">重新读取</button>
+            <button class="btn" id="cfgSave">保存配置</button>
+          </div>
+          <div id="cfgPath" class="kv" style="margin-top:12px"></div>
+        </div>
+        <div id="cfgForm"></div>
+      </section>
+
+      <!-- 关于 -->
+      <section class="panel" id="panel-about">
+        <div class="card">
+          <h3>这个控制台能做什么</h3>
+          <p class="hint">它是 douyin-downloader 的网页可视化端，通过 REST API 驱动同一套后端逻辑。</p>
+          <div class="tbl-wrap">
+            <table>
+              <thead><tr><th style="width:150px">页签</th><th>覆盖的项目功能</th></tr></thead>
+              <tbody>
+                <tr><td>链接下载</td><td>视频 / 图文 / 合集 / 音乐 / 主页批量（post·like·mix·music）/ 收藏夹（collect·collectmix）/ 直播 / 短链解析；画质档位；时间范围；内容开关（视频·封面·音乐·头像·JSON）；置顶作品；评论采集；视频转写</td></tr>
+                <tr><td>任务中心</td><td>并发任务队列、状态与计数（总/成功/失败/跳过）、失败重试、任务结果追踪</td></tr>
+                <tr><td>数据发现</td><td>热搜榜抓取、关键词搜索，均导出 JSONL 快照</td></tr>
+                <tr><td>下载档案</td><td>download_manifest.jsonl 清单浏览、SQLite 历史分页与作者 / 标题 / 类型筛选</td></tr>
+                <tr><td>配置中心</td><td>并发、限速、重试、代理、命名模板、增量下载、浏览器兜底、通知、服务端参数等全部可编辑项</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <h3>常用命令</h3>
+          <div class="code">python run.py --serve --serve-port 8000     # 启动本控制台
+python run.py -c config.yml                  # 纯命令行批量下载
+python -m tools.cookie_fetcher --config config.yml   # 交互式抓取 Cookie</div>
+        </div>
+        <div class="card">
+          <h3>免责声明</h3>
+          <p style="color:var(--muted);font-size:13px;margin:0">
+            本工具仅用于技术研究、学习交流与个人数据管理。请勿用于侵犯他人隐私、版权或其他合法权益的用途；
+            使用者应自行承担因使用本项目产生的全部风险与责任。平台接口策略变更导致功能失效属于正常技术风险。
+          </p>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+<div class="toasts" id="toasts"></div>
+
+<script>
+"use strict";
+
+/* ============================ 基础工具 ============================ */
+const LS_KEY = "dy_console_api_base";
+const state = {
+  base: localStorage.getItem(LS_KEY) || "",
+  config: null,
+  configMeta: null,
+  // 默认选中「主页发布作品」，与 config.yml 的 mode 默认值一致。
+  // 这样作者主页批量下载的数量输入框一进页面就可见，不需要用户先猜。
+  modes: ["post"],
+  numberValues: {},
+  downloadDirAbs: "",
+  settingsSchema: null,
+  jobsTimer: null,
+  archivePage: 1,
+  archiveTotalPages: 1
+};
+
+const MODE_LABELS = {
+  post: "主页发布作品", like: "主页点赞作品", mix: "主页合集作品", music: "主页音乐作品",
+  collect: "我的收藏夹", collectmix: "我的收藏合集"
+};
+const MODE_HINT = {
+  post: "作者主页链接 → 批量下载该博主发布的全部作品",
+  like: "作者主页链接 → 批量下载该博主点赞过的作品",
+  mix: "作者主页链接 → 批量下载该博主的合集作品",
+  music: "作者主页链接 → 批量下载该博主的音乐作品",
+  collect: "仅当前登录账号可用",
+  collectmix: "仅当前登录账号可用"
+};
+const QUALITIES = [
+  ["original", "original · 原画（多一次探测请求）"],
+  ["highest", "highest · 最高转码档（默认）"],
+  ["1440p", "1440p"], ["1080p", "1080p"], ["720p", "720p"],
+  ["540p", "540p"], ["480p", "480p"], ["360p", "360p"],
+  ["lowest", "lowest · 最低档（省流量）"]
+];
+
+function apiUrl(path) {
+  return (state.base || "").replace(/\/+$/, "") + path;
+}
+
+async function api(path, options) {
+  const opts = Object.assign({ headers: {} }, options || {});
+  if (opts.body && typeof opts.body !== "string") {
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(opts.body);
+  }
+  let resp;
+  try {
+    resp = await fetch(apiUrl(path), opts);
+  } catch (err) {
+    throw new Error("无法连接服务：" + err.message);
+  }
+  const text = await resp.text();
+  let data = null;
+  if (text) {
+    try { data = JSON.parse(text); } catch (e) { data = { raw: text }; }
+  }
+  if (!resp.ok) {
+    const detail = data && (data.detail || data.message);
+    throw new Error(detail || ("HTTP " + resp.status));
+  }
+  return data;
+}
+
+function toast(message, kind) {
+  const box = document.getElementById("toasts");
+  const el = document.createElement("div");
+  el.className = "toast " + (kind || "");
+  el.textContent = message;
+  box.appendChild(el);
+  setTimeout(function () { el.remove(); }, 4200);
+}
+
+function esc(value) {
+  return String(value === null || value === undefined ? "" : value)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+function fmtTime(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso);
+  return d.toLocaleString("zh-CN", { hour12: false });
+}
+
+function fmtUnix(sec) {
+  if (!sec) return "—";
+  const d = new Date(Number(sec) * 1000);
+  if (isNaN(d.getTime())) return String(sec);
+  return d.toLocaleString("zh-CN", { hour12: false });
+}
+
+function fmtNum(value) {
+  if (typeof value !== "number") return esc(value);
+  return value.toLocaleString("zh-CN");
+}
+
+function shortUrl(url) {
+  const s = String(url || "");
+  return s.length > 62 ? s.slice(0, 59) + "…" : s;
+}
+
+function urlTypeOf(url) {
+  const s = String(url || "");
+  const pairs = [
+    [/\/video\//, "视频"], [/\/note\/|\/gallery\//, "图文"],
+    [/\/collection\/|\/mix\//, "合集"], [/\/music\//, "音乐"],
+    [/\/user\/self/, "我的收藏"], [/\/user\//, "作者主页"],
+    [/live\.douyin\.com|follow\/live/, "直播"], [/\/vsdetail\//, "直播回放"]
+  ];
+  for (let i = 0; i < pairs.length; i++) if (pairs[i][0].test(s)) return pairs[i][1];
+  return "链接";
+}
+
+function getPath(obj, path) {
+  return path.split(".").reduce(function (acc, key) {
+    return acc === undefined || acc === null ? undefined : acc[key];
+  }, obj);
+}
+
+function setPath(obj, path, value) {
+  const parts = path.split(".");
+  let node = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (typeof node[parts[i]] !== "object" || node[parts[i]] === null) node[parts[i]] = {};
+    node = node[parts[i]];
+  }
+  node[parts[parts.length - 1]] = value;
+}
+
+/* ============================ 页签切换 ============================ */
+const PAGE_META = {
+  overview: ["总览", "服务状态 · 运行参数 · 任务与档案概览"],
+  download: ["链接下载", "粘贴链接，配置范围，提交任务"],
+  jobs: ["任务中心", "任务队列与结果追踪"],
+  discovery: ["数据发现", "热搜榜与关键词搜索"],
+  archive: ["下载档案", "下载清单与历史数据库"],
+  settings: ["配置中心", "编辑 config.yml"],
+  about: ["关于", "功能范围与免责声明"]
+};
+
+document.getElementById("nav").addEventListener("click", function (evt) {
+  const btn = evt.target.closest("button[data-tab]");
+  if (!btn) return;
+  activateTab(btn.dataset.tab);
+});
+
+function activateTab(tab) {
+  document.querySelectorAll("#nav button").forEach(function (b) {
+    b.classList.toggle("active", b.dataset.tab === tab);
+  });
+  document.querySelectorAll(".panel").forEach(function (p) {
+    p.classList.toggle("active", p.id === "panel-" + tab);
+  });
+  const meta = PAGE_META[tab] || ["", ""];
+  document.getElementById("pageTitle").textContent = meta[0];
+  document.getElementById("pageSub").textContent = meta[1];
+
+  if (state.jobsTimer) { clearInterval(state.jobsTimer); state.jobsTimer = null; }
+  if (tab === "jobs") { loadJobs(); startJobPolling(); }
+  if (tab === "overview") loadStats();
+  if (tab === "settings" && !state.config) loadConfig();
+}
+
+/* ============================ 连接状态 ============================ */
+const connDot = document.getElementById("connDot");
+const connText = document.getElementById("connText");
+
+function setConn(ok, text) {
+  connDot.className = "dot " + (ok ? "on" : "off");
+  connText.textContent = text;
+}
+
+async function ping() {
+  try {
+    const res = await api("/api/v1/health");
+    setConn(res.status === "ok", res.status === "ok" ? "已连接" : "状态异常");
+    if (res.status === "ok") loadStats();
+    return true;
+  } catch (err) {
+    setConn(false, "未连接");
+    toast(err.message, "err");
+    return false;
+  }
+}
+
+document.getElementById("apiBase").value = state.base;
+document.getElementById("apiBase").addEventListener("change", function (e) {
+  state.base = e.target.value.trim().replace(/\/+$/, "");
+  localStorage.setItem(LS_KEY, state.base);
+  ping();
+});
+document.getElementById("btnPing").addEventListener("click", ping);
+
+/* ============================ 总览 ============================ */
+async function loadStats() {
+  document.getElementById("brandSub").textContent = "正在读取服务状态…";
+  try {
+    const s = await api("/api/v1/stats");
+    document.getElementById("brandSub").textContent = "v" + s.version + " · 服务运行中";
+    document.getElementById("verText").textContent = "v" + s.version;
+
+    document.getElementById("sHealth").textContent = "正常";
+    document.getElementById("sHealth").className = "v ok";
+    document.getElementById("sCookie").textContent = s.cookies.valid ? "有效" : (s.cookies.configured ? "待校验" : "未配置");
+    document.getElementById("sCookie").className = "v " + (s.cookies.valid ? "ok" : (s.cookies.configured ? "warn" : "err"));
+    document.getElementById("sJobs").textContent = fmtNum(s.jobs.total);
+    document.getElementById("sJobs").className = "v";
+    document.getElementById("sArchive").textContent = s.archive.enabled ? fmtNum(s.archive.total) : "未启用";
+    document.getElementById("sArchive").className = "v " + (s.archive.enabled ? "" : "warn");
+
+    state.downloadDirAbs = s.download_dir_abs || "";
+    document.getElementById("ovDirPath").textContent = state.downloadDirAbs || "—";
+
+    const rt = s.runtime;
+    document.getElementById("ovRuntime").innerHTML = [
+      kv("下载目录", s.download_dir),
+      kv("并发线程", rt.thread),
+      kv("限速（请求/秒）", rt.rate_limit),
+      kv("失败重试", rt.retry_times),
+      kv("下载画质", rt.video_quality),
+      kv("默认模式", (rt.mode || []).join(", ") || "—"),
+      kv("代理", rt.proxy ? "已配置" : "未配置")
+    ].join("");
+
+    document.getElementById("ovJobs").innerHTML = [
+      kv("待处理 pending", s.jobs.pending),
+      kv("进行中 running", s.jobs.running),
+      kv("成功 success", s.jobs.success),
+      kv("失败 failed", s.jobs.failed)
+    ].join("");
+
+    document.getElementById("ovServer").innerHTML = [
+      kv("服务版本", "v" + s.version),
+      kv("配置文件", s.config_path || "未指定（使用默认配置）"),
+      kv("Cookie 键数", s.cookies.count + " 个"),
+      kv("缺失关键 Cookie", s.cookies.missing_required.length ? s.cookies.missing_required.join(", ") : "无"),
+      kv("档案库", s.archive.enabled ? "已启用" : "未启用（database: false）")
+    ].join("");
+
+    const authors = s.top_authors || [];
+    const box = document.getElementById("ovAuthors");
+    if (!authors.length) {
+      box.innerHTML = '<div class="empty">暂无数据。下载作者主页作品后（需 database 开启）会在这里聚合。</div>';
+    } else {
+      box.innerHTML = '<table><thead><tr><th style="width:60px">#</th><th>作者</th><th style="width:110px">作品数</th></tr></thead><tbody>' +
+        authors.map(function (a, i) {
+          return "<tr><td>" + (i + 1) + "</td><td>" + esc(a.author_name) +
+            '</td><td class="mono">' + fmtNum(a.download_count) + "</td></tr>";
+        }).join("") + "</tbody></table>";
+    }
+  } catch (err) {
+    setConn(false, "未连接");
+    document.getElementById("brandSub").textContent = "连接失败：" + err.message;
+  }
+}
+
+function kv(k, v) {
+  return '<div class="kv"><span class="k">' + esc(k) + '</span><span class="v">' + esc(v) + "</span></div>";
+}
+
+/* ============================ 链接下载 ============================ */
+function renderModeChips() {
+  const box = document.getElementById("dlModes");
+  box.innerHTML = Object.keys(MODE_LABELS).map(function (m) {
+    const on = state.modes.indexOf(m) >= 0;
+    const title = MODE_HINT[m] ? " title=" + JSON.stringify(MODE_LABELS[m] + "（" + MODE_HINT[m] + "）") : "";
+    return '<div class="chip' + (on ? " on" : "") + '" data-mode="' + m + '"' + title + ">" +
+      esc(MODE_LABELS[m]) + "</div>";
+  }).join("");
+}
+
+function renderModeNumbers() {
+  const box = document.getElementById("dlNumbers");
+  if (!state.modes.length) {
+    box.innerHTML = '<div class="empty" style="grid-column:1/-1;padding:10px">未选择模式。单条视频 / 图文 / 合集 / 音乐 / 直播间链接不需要选模式；<b>作者主页链接需要至少选一个模式</b>。</div>';
+    document.getElementById("dlQuick").innerHTML = "";
+    return;
+  }
+  box.innerHTML = state.modes.map(function (m) {
+    const val = state.numberValues[m] === undefined ? 0 : state.numberValues[m];
+    return '<label class="field" style="margin:0"><span>' + esc(MODE_LABELS[m]) +
+      ' · 数量（0 = 全量下载）</span><input type="number" min="0" data-num="' + m + '" value="' + val + '"></label>';
+  }).join("");
+  document.getElementById("dlQuick").innerHTML =
+    '<span style="font-size:12px;color:var(--dim)">快捷设置数量：</span>' +
+    [[0, "全量"], [20, "最近 20 条"], [50, "最近 50 条"], [100, "最近 100 条"]].map(function (q) {
+      return '<button class="btn ghost mini" data-quick="' + q[0] + '">' + q[1] + "</button>";
+    }).join("");
+}
+
+document.getElementById("dlQuick").addEventListener("click", function (evt) {
+  const btn = evt.target.closest("button[data-quick]");
+  if (!btn) return;
+  const v = Number(btn.dataset.quick);
+  state.modes.forEach(function (m) { state.numberValues[m] = v; });
+  renderModeNumbers();
+  detectLinks();
+});
+
+function renderQuality() {
+  const sel = document.getElementById("dlQuality");
+  sel.innerHTML = QUALITIES.map(function (q) {
+    return '<option value="' + q[0] + '">' + esc(q[1]) + "</option>";
+  }).join("");
+  sel.value = "highest";
+}
+
+function initDownloadTab() {
+  renderModeChips();
+  renderModeNumbers();
+  renderQuality();
+  const contentBox = document.getElementById("dlContent");
+  const items = [
+    ["video", "视频本体", true], ["cover", "封面图", false], ["music", "背景音乐", false],
+    ["avatar", "作者头像", false], ["json", "原始 JSON", false], ["folderstyle", "按作品建子目录", true],
+    ["download_pinned", "包含置顶作品", false], ["author_url", "保存主页地址文本", false],
+    ["homepage_screenshot", "保存主页截图", false]
+  ];
+  contentBox.innerHTML = items.map(function (it) {
+    return '<label class="sw"><input type="checkbox" data-content="' + it[0] + '"' +
+      (it[2] ? " checked" : "") + "><span>" + esc(it[1]) + "</span></label>";
+  }).join("");
+  detectLinks();
+}
+
+document.getElementById("dlModes").addEventListener("click", function (evt) {
+  const chip = evt.target.closest(".chip[data-mode]");
+  if (!chip) return;
+  const m = chip.dataset.mode;
+  const idx = state.modes.indexOf(m);
+  if (idx >= 0) state.modes.splice(idx, 1); else state.modes.push(m);
+  renderModeChips();
+  renderModeNumbers();
+  validateModes();
+  detectLinks();
+});
+
+// 数量输入框的值必须回写到 state，否则提交时会被当成 0（全量）。
+document.getElementById("dlNumbers").addEventListener("input", function (evt) {
+  const el = evt.target.closest("input[data-num]");
+  if (!el) return;
+  const v = Number(el.value);
+  state.numberValues[el.dataset.num] = isNaN(v) ? 0 : Math.max(0, Math.floor(v));
+});
+
+function validateModes() {
+  const exclusive = state.modes.filter(function (m) { return m === "collect" || m === "collectmix"; });
+  const others = state.modes.filter(function (m) { return m !== "collect" && m !== "collectmix"; });
+  const box = document.getElementById("dlNotice");
+  if (exclusive.length && others.length) {
+    box.textContent = "注意：collect / collectmix 必须单独使用，不能与 post / like / mix / music 混用，否则后端会拒绝。";
+  } else if (exclusive.length) {
+    box.textContent = "提示：收藏夹模式只对当前登录账号生效，链接需为 douyin.com/user/self?showTab=favorite_collection。";
+  } else if (state.modes.length) {
+    box.textContent = "";
+  } else {
+    box.textContent = "";
+  }
+}
+
+document.getElementById("dlLinks").addEventListener("input", detectLinks);
+
+// 抖音「复制链接」给的其实是整条分享文案，例如：
+//   长按复制此条消息，打开抖音搜索，查看TA的更多作品。 https://v.douyin.com/xxxx/
+// 所以不能把整行当 URL 用，必须先把链接抠出来。
+const URL_IN_TEXT = /https?:\/\/[^\s<>"'）)】\]，。、；！？]+/i;
+const BARE_DOUYIN = /(?:v\.|www\.|live\.)?(?:douyin|iesdouyin)\.com\/[^\s<>"'）)】\]，。、；！？]*|webcast\.amemv\.com\/[^\s<>"'）)】\]，。、；！？]*/i;
+
+function stripTrailingJunk(s) {
+  return String(s).replace(/[.,;:!?)\]}>）】、，。；：！？]+$/, "");
+}
+
+function extractUrl(line) {
+  const text = String(line || "").trim();
+  if (!text) return "";
+  const full = text.match(URL_IN_TEXT);
+  if (full) return stripTrailingJunk(full[0]);
+  const bare = text.match(BARE_DOUYIN);
+  if (bare) return "https://" + stripTrailingJunk(bare[0]);
+  return "";
+}
+
+// 每一行返回 { raw, url, cleaned }：url 为空表示这行没识别出链接。
+function parseLinks(text) {
+  return String(text || "").split(/\s*\n\s*/)
+    .map(function (s) { return s.trim(); })
+    .filter(function (s) { return s.length > 0 && !s.startsWith("#"); })
+    .map(function (raw) {
+      const url = extractUrl(raw);
+      return { raw: raw, url: url, cleaned: !!url && url !== raw };
+    });
+}
+
+function urlsOf(items) {
+  return items.filter(function (i) { return i.url; }).map(function (i) { return i.url; });
+}
+
+function detectLinks() {
+  const items = parseLinks(document.getElementById("dlLinks").value);
+  const urls = urlsOf(items);
+  const skipped = items.length - urls.length;
+  const cleaned = items.filter(function (i) { return i.cleaned; }).length;
+  document.getElementById("dlCount").textContent = "识别到 " + urls.length + " 条链接";
+
+  const box = document.getElementById("dlDetect");
+  if (!items.length) { box.innerHTML = ""; return; }
+
+  let html = "";
+  if (urls.length) {
+    const groups = {};
+    urls.forEach(function (u) { const t = urlTypeOf(u); groups[t] = (groups[t] || 0) + 1; });
+    const parts = Object.keys(groups).map(function (k) { return k + " × " + groups[k]; });
+    html += '<div class="code" style="white-space:normal">识别结果：' + esc(parts.join("　·　")) + "</div>";
+  }
+  if (cleaned) {
+    html += '<div style="margin-top:8px;font-size:12.5px;color:var(--info)">已从 ' + cleaned +
+      " 行分享文案中自动提取链接，多余文字已忽略。</div>";
+  }
+  if (skipped) {
+    html += '<div style="margin-top:8px;font-size:12.5px;color:var(--err)">有 ' + skipped +
+      " 行没识别出链接，已跳过。请确认粘贴的是抖音链接。</div>";
+  }
+  if (!urls.length) { box.innerHTML = html; return; }
+
+  const authorCount = urls.filter(function (u) { return urlTypeOf(u) === "作者主页"; }).length;
+  if (authorCount) {
+    const chosen = state.modes.length
+      ? state.modes.map(function (m) { return MODE_LABELS[m]; }).join("、")
+      : "尚未选择（将按默认「主页发布作品」执行）";
+    html += '<div style="margin-top:8px;font-size:12.5px;color:var(--warn)">检测到 <b>' + authorCount +
+      "</b> 个作者主页链接 → 将按所选模式<b>批量下载</b>，当前范围：<b>" + esc(chosen) +
+      "</b>。可在下方「批量下载范围」调整。</div>";
+  } else {
+    html += '<div style="margin-top:8px;font-size:12.5px;color:var(--muted)">未检测到作者主页链接，下方「批量下载范围」不影响本次提交。</div>';
+  }
+  box.innerHTML = html;
+}
+
+document.getElementById("dlDemoAuthor").addEventListener("click", function () {
+  document.getElementById("dlLinks").value =
+    "https://www.douyin.com/user/MS4wLjABAAAA6O7EZyfDRYXxJrUTpf91K3tmB4rBROkAw-nYMfld8ss";
+  detectLinks();
+});
+document.getElementById("dlDemo").addEventListener("click", function () {
+  document.getElementById("dlLinks").value = "https://www.douyin.com/video/7604129988555574538";
+  detectLinks();
+});
+document.getElementById("dlClear").addEventListener("click", function () {
+  document.getElementById("dlLinks").value = "";
+  detectLinks();
+});
+
+function buildOverrides() {
+  const content = {};
+  document.querySelectorAll("#dlContent input[data-content]").forEach(function (el) {
+    content[el.dataset.content] = el.checked;
+  });
+  const number = {};
+  state.modes.forEach(function (m) { number[m] = Number(state.numberValues[m] || 0); });
+  const mixVal = number.mix === undefined ? 0 : number.mix;
+  number.allmix = mixVal;
+
+  const overrides = {
+    mode: state.modes.length ? state.modes.slice() : ["post"],
+    number: number,
+    video_quality: document.getElementById("dlQuality").value,
+    start_time: document.getElementById("dlStart").value || "",
+    end_time: document.getElementById("dlEnd").value || "",
+    comments: {
+      enabled: document.getElementById("dlComments").checked,
+      include_replies: document.getElementById("dlCommentsReplies").checked,
+      max_comments: Number(document.getElementById("dlCommentsMax").value || 0)
+    },
+    transcript: { enabled: document.getElementById("dlTranscript").checked }
+  };
+  Object.keys(content).forEach(function (k) { overrides[k] = content[k]; });
+  return overrides;
+}
+
+document.getElementById("dlSubmit").addEventListener("click", async function () {
+  const urls = urlsOf(parseLinks(document.getElementById("dlLinks").value));
+  if (!urls.length) { toast("没有识别到链接。可直接粘贴 App 的分享文案，会自动提取其中的链接", "warn"); return; }
+  if (state.modes.length && state.modes.some(function (m) { return m === "collect" || m === "collectmix"; })) {
+    const others = state.modes.filter(function (m) { return m !== "collect" && m !== "collectmix"; });
+    if (others.length) { toast("collect / collectmix 不能与其他模式混用", "err"); return; }
+  }
+  const overrides = buildOverrides();
+  const btn = this;
+  btn.disabled = true;
+  btn.textContent = "提交中…";
+  const results = [];
+  for (let i = 0; i < urls.length; i++) {
+    try {
+      const r = await api("/api/v1/download", { method: "POST", body: { url: urls[i], overrides: overrides } });
+      results.push({ url: urls[i], ok: true, job_id: r.job_id, status: r.status });
+    } catch (err) {
+      results.push({ url: urls[i], ok: false, error: err.message });
+    }
+  }
+  btn.disabled = false;
+  btn.textContent = "提交下载任务";
+  const ok = results.filter(function (r) { return r.ok; }).length;
+  toast("已提交 " + ok + " / " + results.length + " 个任务", ok === results.length ? "ok" : "warn");
+  document.getElementById("dlResult").innerHTML =
+    '<div class="card"><h3>提交结果</h3>' +
+    (ok ? '<p class="hint">任务已进入队列。下载是后台异步执行的，点右侧按钮或上方「任务中心」可以实时看进度、暂停或取消。</p>' +
+      '<div class="row" style="margin-bottom:12px"><button class="btn" id="dlGoJobs">查看下载进度</button></div>' : "") +
+    '<div class="tbl-wrap"><table><thead><tr><th style="width:80px">状态</th><th>链接</th><th style="width:150px">任务 ID</th></tr></thead><tbody>' +
+    results.map(function (r) {
+      return "<tr><td>" + (r.ok ? '<span class="badge b-pending">已入队</span>' : '<span class="badge b-failed">失败</span>') +
+        '</td><td class="mono">' + esc(shortUrl(r.url)) + "</td><td class=\"mono\">" +
+        (r.ok ? esc(r.job_id) : esc(r.error)) + "</td></tr>";
+    }).join("") + "</tbody></table></div></div>";
+  const goBtn = document.getElementById("dlGoJobs");
+  if (goBtn) goBtn.addEventListener("click", function () { activateTab("jobs"); });
+  // 有任务入队就直接切到任务中心——提交后停在原地看不见任何过程，
+  // 会被误认为"没开始下载"。
+  if (ok) setTimeout(function () { activateTab("jobs"); }, 400);
+});
+
+document.getElementById("dlPreview").addEventListener("click", function () {
+  const payload = { mode: buildOverrides().mode, overrides: buildOverrides() };
+  document.getElementById("dlResult").innerHTML =
+    '<div class="card"><h3>提交参数预览</h3><div class="code">' + esc(JSON.stringify(payload, null, 2)) + "</div></div>";
+});
+
+/* ============================ 任务中心 ============================ */
+function jobBadge(job) {
+  if (job.paused && job.status === "running") return '<span class="badge b-paused">已暂停</span>';
+  const map = {
+    pending: ["b-pending", "排队中"], running: ["b-running", "下载中"],
+    success: ["b-success", "已完成"], failed: ["b-failed", "失败"],
+    cancelled: ["b-cancelled", "已取消"]
+  };
+  const hit = map[job.status] || ["b-pending", job.status];
+  return '<span class="badge ' + hit[0] + '">' + esc(hit[1]) + "</span>";
+}
+
+function fmtBytes(n) {
+  if (n === null || n === undefined) return "—";
+  const units = ["B", "KB", "MB", "GB"];
+  let v = Number(n), i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return (i === 0 ? v : v.toFixed(1)) + " " + units[i];
+}
+
+function jobProgressBar(job) {
+  const pct = job.progress_percent;
+  if (job.status === "running" || job.status === "pending") {
+    if (pct === null || pct === undefined) return '<div class="bar indet"><i></i></div>';
+    return '<div class="bar"><i style="width:' + pct + '%"></i></div>';
+  }
+  if (job.status === "success") return '<div class="bar ok"><i style="width:100%"></i></div>';
+  if (job.status === "failed") return '<div class="bar err"><i style="width:100%"></i></div>';
+  return '<div class="bar"><i style="width:100%"></i></div>';
+}
+
+function jobActions(job) {
+  const id = esc(job.job_id);
+  const active = job.status === "pending" || job.status === "running";
+  let html = "";
+  if (active) {
+    html += job.paused
+      ? '<button class="btn ghost mini" data-act="resume" data-id="' + id + '">继续</button>'
+      : '<button class="btn ghost mini" data-act="pause" data-id="' + id + '">暂停</button>';
+    html += '<button class="btn ghost mini" data-act="cancel" data-id="' + id + '">取消</button>';
+  } else {
+    html += '<button class="btn ghost mini" data-act="retry" data-id="' + id + '">重试</button>';
+  }
+  html += '<button class="btn ghost mini" data-act="delete" data-id="' + id + '">删除</button>';
+  return html;
+}
+
+function renderJob(job) {
+  const pct = job.progress_percent;
+  const processed = job.processed || 0;
+  const total = job.total || 0;
+  const counter = total > 0
+    ? processed + " / " + total + " 条（" + (pct === null || pct === undefined ? "—" : pct + "%") + "）"
+    : processed + " 条已处理";
+
+  let line = "";
+  if (job.current && job.current.bytes_total) {
+    line = "正在下载 " + job.current.aweme_id + " · " + fmtBytes(job.current.bytes_read) +
+      " / " + fmtBytes(job.current.bytes_total) +
+      (job.current.percent === null || job.current.percent === undefined ? "" : "（" + job.current.percent + "%）");
+  } else if (job.step || job.detail) {
+    line = esc(job.step) + (job.detail ? " · " + esc(job.detail) : "");
+  }
+
+  const meta = [
+    "<span>已处理 <b>" + esc(counter) + "</b></span>",
+    "<span>成功 <b>" + job.success + "</b></span>",
+    "<span>失败 <b>" + job.failed + "</b></span>",
+    "<span>跳过 <b>" + job.skipped + "</b></span>"
+  ];
+  if (job.duration_seconds !== null && job.duration_seconds !== undefined) {
+    meta.push("<span>耗时 <b>" + job.duration_seconds + "s</b></span>");
+  }
+  if (job.author_nickname) meta.push("<span>作者 <b>" + esc(job.author_nickname) + "</b></span>");
+
+  let sub = "任务 " + esc(job.job_id) + " · 创建于 " + esc(fmtTime(job.created_at));
+  if (job.last_item) sub += " · 最近完成 " + esc(job.last_item);
+
+  // 输出目录行带「打开文件夹 / 复制路径」。任务没跑到落盘（例如失败）时
+  // output_dirs 为空，退化成下载根目录，用户依然点得动。
+  const dirRow = function (dir, isRoot) {
+    return '<div class="sub" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+      "<span>" + (isRoot ? "下载根目录" : "输出目录") + " " + esc(dir) + "</span>" +
+      '<button class="btn ghost mini" data-open="' + esc(isRoot ? "" : dir) + '">打开文件夹</button>' +
+      '<button class="btn ghost mini" data-copy="' + esc(dir) + '">复制路径</button>' +
+      "</div>";
+  };
+  const ownDirs = job.output_dirs || [];
+  const dirs = ownDirs.length
+    ? ownDirs.map(function (d) { return dirRow(d, false); }).join("")
+    : (state.downloadDirAbs ? dirRow(state.downloadDirAbs, true) : "");
+
+  const err = job.error ? '<div class="line" style="color:var(--err)">' + esc(job.error) + "</div>" : "";
+
+  return '<div class="jobcard">' +
+    '<div class="top">' + jobBadge(job) +
+    '<span style="font-size:12px;color:var(--muted)">' + esc(urlTypeOf(job.url)) + "</span>" +
+    '<span class="url" title="' + esc(job.url) + '">' + esc(job.url) + "</span>" +
+    '<span class="acts">' + jobActions(job) + "</span></div>" +
+    jobProgressBar(job) +
+    (line ? '<div class="line">' + line + "</div>" : "") +
+    '<div class="meta" style="margin-top:8px">' + meta.join("") + "</div>" +
+    err + '<div class="sub">' + sub + "</div>" + dirs +
+    "</div>";
+}
+
+async function loadJobs() {
+  const box = document.getElementById("jobList");
+  try {
+    const data = await api("/api/v1/jobs");
+    // 进行中的排在最前面，其余按创建时间倒序。
+    const jobs = (data.jobs || []).slice().sort(function (a, b) {
+      const aActive = a.status === "running" || a.status === "pending";
+      const bActive = b.status === "running" || b.status === "pending";
+      if (aActive !== bActive) return aActive ? -1 : 1;
+      return String(b.created_at).localeCompare(String(a.created_at));
+    });
+    const counts = { pending: 0, running: 0, success: 0, failed: 0, cancelled: 0 };
+    jobs.forEach(function (j) { if (counts[j.status] !== undefined) counts[j.status]++; });
+    document.getElementById("jobSummary").textContent =
+      "共 " + jobs.length + " 个 · 排队 " + counts.pending + " · 下载中 " + counts.running +
+      " · 已完成 " + counts.success + " · 失败 " + counts.failed + " · 已取消 " + counts.cancelled;
+
+    if (!jobs.length) {
+      box.innerHTML = '<div class="empty">暂无任务。到「链接下载」提交一个链接试试。</div>';
+      return;
+    }
+    box.innerHTML = jobs.map(renderJob).join("");
+  } catch (err) {
+    box.innerHTML = '<div class="empty">读取任务失败：' + esc(err.message) + "</div>";
+  }
+}
+
+document.getElementById("jobList").addEventListener("click", async function (evt) {
+  const openBtn = evt.target.closest("button[data-open]");
+  if (openBtn) { openFolder(openBtn.dataset.open || ""); return; }
+  const copyBtn = evt.target.closest("button[data-copy]");
+  if (copyBtn) { copyText(copyBtn.dataset.copy, "已复制路径"); return; }
+
+  const btn = evt.target.closest("button[data-act]");
+  if (!btn) return;
+  const act = btn.dataset.act;
+  const id = btn.dataset.id;
+  btn.disabled = true;
+  const labels = { pause: "已暂停", resume: "已继续", cancel: "已取消", retry: "已重新入队" };
+  try {
+    if (act === "delete") {
+      await api("/api/v1/jobs/" + encodeURIComponent(id), { method: "DELETE" });
+      toast("已删除该任务记录", "ok");
+    } else {
+      await api("/api/v1/jobs/" + encodeURIComponent(id) + "/" + act, { method: "POST" });
+      toast(labels[act] || "已完成", "ok");
+    }
+    loadJobs();
+  } catch (err) {
+    toast("操作失败：" + err.message, "err");
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("jobClear").addEventListener("click", async function () {
+  const btn = this;
+  btn.disabled = true;
+  try {
+    const r = await api("/api/v1/jobs", { method: "DELETE" });
+    toast(r.removed ? "已清理 " + r.removed + " 条已结束任务" : "没有可清理的已结束任务",
+      r.removed ? "ok" : "warn");
+    loadJobs();
+  } catch (err) {
+    toast("清理失败：" + err.message, "err");
+  }
+  btn.disabled = false;
+});
+
+document.getElementById("jobRefresh").addEventListener("click", loadJobs);
+document.getElementById("jobAuto").addEventListener("change", function () { startJobPolling(); });
+
+function startJobPolling() {
+  if (state.jobsTimer) { clearInterval(state.jobsTimer); state.jobsTimer = null; }
+  if (!document.getElementById("jobAuto").checked) return;
+  state.jobsTimer = setInterval(loadJobs, 1500);
+}
+
+/* ============================ 数据发现 ============================ */
+document.getElementById("hotRun").addEventListener("click", async function () {
+  const btn = this;
+  btn.disabled = true; btn.textContent = "抓取中…";
+  const box = document.getElementById("hotResult");
+  box.innerHTML = '<div class="empty">正在请求抖音热搜榜…</div>';
+  try {
+    const limit = Number(document.getElementById("hotLimit").value || 0);
+    const data = await api("/api/v1/discovery/hot-board?limit=" + limit);
+    toast("热搜榜已保存 " + data.count + " 条", "ok");
+    box.innerHTML = renderHot(data);
+  } catch (err) {
+    box.innerHTML = '<div class="empty" style="color:var(--err)">' + esc(err.message) + "</div>";
+  }
+  btn.disabled = false; btn.textContent = "抓取热搜榜";
+});
+
+function renderHot(data) {
+  const items = data.items || [];
+  if (!items.length) return '<div class="empty">未返回任何词条（可能是 Cookie 失效或风控）。</div>';
+  const rows = items.map(function (it, i) {
+    const word = it.word || it.sentence || it.title || JSON.stringify(it).slice(0, 60);
+    const hot = it.hot_value !== undefined ? fmtNum(it.hot_value) : (it.hot_value_str || "—");
+    return "<tr><td>" + (i + 1) + "</td><td>" + esc(word) +
+      '</td><td class="mono">' + esc(hot) + '</td><td><button class="btn ghost mini" data-search="' + esc(word) + '">搜同款</button></td></tr>';
+  }).join("");
+  return '<div class="kv"><span class="k">快照文件</span><span class="v">' + esc(data.path) + "</span></div>" +
+    '<div class="tbl-wrap" style="margin-top:10px"><table><thead><tr><th style="width:50px">#</th><th>热词</th><th style="width:110px">热度</th><th style="width:90px">操作</th></tr></thead><tbody>' + rows + "</tbody></table></div>";
+}
+
+document.getElementById("hotResult").addEventListener("click", function (evt) {
+  const btn = evt.target.closest("button[data-search]");
+  if (!btn) return;
+  activateTab("discovery");
+  document.getElementById("searchKeyword").value = btn.dataset.search;
+  document.getElementById("searchRun").click();
+});
+
+document.getElementById("searchRun").addEventListener("click", async function () {
+  const keyword = document.getElementById("searchKeyword").value.trim();
+  if (!keyword) { toast("请输入关键词", "warn"); return; }
+  const btn = this;
+  btn.disabled = true; btn.textContent = "搜索中…";
+  const box = document.getElementById("searchResult");
+  box.innerHTML = '<div class="empty">正在搜索…</div>';
+  try {
+    const max = Number(document.getElementById("searchMax").value || 50);
+    const data = await api("/api/v1/discovery/search?keyword=" + encodeURIComponent(keyword) + "&max_items=" + max);
+    toast("搜索完成，共 " + data.count + " 条", "ok");
+    box.innerHTML = renderSearch(data);
+  } catch (err) {
+    box.innerHTML = '<div class="empty" style="color:var(--err)">' + esc(err.message) + "</div>";
+  }
+  btn.disabled = false; btn.textContent = "开始搜索";
+});
+
+function renderSearch(data) {
+  const items = data.items || [];
+  if (!items.length) return '<div class="empty">没有结果。</div>';
+  const rows = items.slice(0, 200).map(function (it) {
+    const id = it.aweme_id || "";
+    const author = (it.author && (it.author.nickname || it.author.unique_id)) || "—";
+    const desc = it.desc || "";
+    const link = "https://www.douyin.com/video/" + id;
+    return '<tr><td><span class="ellip" title="' + esc(desc) + '">' + esc(desc || "（无标题）") + "</span></td>" +
+      "<td>" + esc(author) + '</td><td class="mono">' + esc(id) + "</td>" +
+      '<td><button class="btn ghost mini" data-copy="' + esc(link) + '">复制链接</button></td></tr>';
+  }).join("");
+  return '<div class="kv"><span class="k">快照文件</span><span class="v">' + esc(data.path) + "</span></div>" +
+    '<div class="kv"><span class="k">条数</span><span class="v">' + data.count + "</span></div>" +
+    '<div class="tbl-wrap" style="margin-top:10px"><table><thead><tr><th>作品描述</th><th style="width:140px">作者</th><th style="width:180px">作品 ID</th><th style="width:90px">操作</th></tr></thead><tbody>' + rows + "</tbody></table></div>";
+}
+
+document.getElementById("searchResult").addEventListener("click", function (evt) {
+  const btn = evt.target.closest("button[data-copy]");
+  if (!btn) return;
+  copyText(btn.dataset.copy);
+});
+
+function copyText(text, label) {
+  const value = String(text || "");
+  if (!value) { toast("没有可复制的路径", "warn"); return; }
+  const done = function () { toast((label || "已复制") + "：" + value, "ok"); };
+  // 老浏览器 / 非安全上下文下 navigator.clipboard 可能不存在，退回
+  // textarea + execCommand 的经典做法。
+  const legacy = function () {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = value;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.top = "-1000px";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      ta.setSelectionRange(0, value.length);
+      const ok = document.execCommand("copy");
+      ta.remove();
+      if (ok) { done(); return; }
+    } catch (err) { /* 落到下面的提示 */ }
+    toast("复制失败，请手动选择：" + value, "warn");
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(value).then(done, legacy);
+  } else {
+    legacy();
+  }
+}
+
+// 打开本机下载文件夹：交给服务端调用系统文件管理器。失败时退化成复制路径，
+// 保证用户至少能拿到路径自己粘贴。
+async function openFolder(path) {
+  const target = path || state.downloadDirAbs || "";
+  try {
+    const res = await api("/api/v1/open-folder", { method: "POST", body: { path: path || "" } });
+    toast("已打开文件夹：" + res.opened, "ok");
+  } catch (err) {
+    toast("无法自动打开文件夹（" + err.message + "），已改为复制路径", "warn");
+    copyText(target, "已复制路径");
+  }
+}
+
+document.getElementById("ovOpenDir").addEventListener("click", function () { openFolder(""); });
+document.getElementById("ovCopyDir").addEventListener("click", function () {
+  copyText(state.downloadDirAbs, "已复制路径");
+});
+
+/* ============================ 下载档案 ============================ */
+document.getElementById("mfRun").addEventListener("click", async function () {
+  const btn = this; btn.disabled = true; btn.textContent = "读取中…";
+  const box = document.getElementById("mfResult");
+  try {
+    const limit = Number(document.getElementById("mfLimit").value || 50);
+    const data = await api("/api/v1/manifest?limit=" + limit);
+    if (!data.found) {
+      box.innerHTML = '<div class="empty">未找到清单文件：<span class="mono">' + esc(data.path) + "</span></div>";
+    } else {
+      const items = data.items || [];
+      box.innerHTML = '<div class="kv"><span class="k">清单文件</span><span class="v">' + esc(data.path) + "</span></div>" +
+        '<div class="tbl-wrap" style="margin-top:10px"><table><thead><tr><th style="width:96px">日期</th><th>标题</th>' +
+        '<th style="width:130px">作者</th><th style="width:70px">类型</th><th>标签</th></tr></thead><tbody>' +
+        (items.length ? items.map(function (it) {
+          const tags = Array.isArray(it.tags) ? it.tags.join(" · ") : "";
+          return '<tr><td class="mono">' + esc(it.date || "—") + '</td><td><span class="ellip" title="' + esc(it.desc) + '">' +
+            esc(it.desc || "—") + "</span></td><td>" + esc(it.author_name || "—") + '</td><td>' + esc(it.media_type || "—") +
+            '</td><td><span class="ellip" title="' + esc(tags) + '">' + esc(tags || "—") + "</span></td></tr>";
+        }).join("") : '<tr><td colspan="5"><div class="empty">清单为空</div></td></tr>') + "</tbody></table></div>";
+    }
+  } catch (err) {
+    box.innerHTML = '<div class="empty" style="color:var(--err)">' + esc(err.message) + "</div>";
+  }
+  btn.disabled = false; btn.textContent = "读取清单";
+});
+
+document.getElementById("arRun").addEventListener("click", function () { state.archivePage = 1; loadArchive(); });
+
+async function loadArchive() {
+  const box = document.getElementById("arResult");
+  try {
+    const qs = new URLSearchParams({
+      page: String(state.archivePage),
+      size: String(Number(document.getElementById("arSize").value || 20)),
+      author: document.getElementById("arAuthor").value.trim(),
+      title: document.getElementById("arTitle").value.trim(),
+      aweme_type: document.getElementById("arType").value
+    });
+    const data = await api("/api/v1/history?" + qs.toString());
+    if (!data.enabled) {
+      box.innerHTML = '<div class="empty">历史库未启用：' + esc(data.note || "database: false") + "</div>";
+      return;
+    }
+    const items = data.items || [];
+    state.archiveTotalPages = Math.max(1, Math.ceil(data.total / data.size));
+    const rows = items.length ? items.map(function (it) {
+      const link = it.aweme_id ? "https://www.douyin.com/video/" + it.aweme_id : "";
+      return '<tr><td class="mono">' + esc(it.aweme_type || "—") + "</td>" +
+        '<td><span class="ellip" title="' + esc(it.title) + '">' + esc(it.title || "—") + "</span></td>" +
+        "<td>" + esc(it.author_name || "—") + '</td><td class="mono">' + esc(fmtUnix(it.create_time)) + "</td>" +
+        '<td class="mono">' + esc(fmtUnix(it.download_time)) + '</td><td class="mono"><span class="ellip" title="' +
+        esc(it.file_path) + '">' + esc(it.file_path || "—") + "</span></td>" +
+        '<td><button class="btn ghost mini" data-copy="' + esc(link) + '">链接</button></td></tr>';
+    }).join("") : '<tr><td colspan="7"><div class="empty">没有匹配记录</div></td></tr>';
+
+    box.innerHTML = '<div class="kv"><span class="k">命中总数</span><span class="v">' + fmtNum(data.total) + "</span></div>" +
+      '<div class="tbl-wrap" style="margin-top:10px"><table><thead><tr><th style="width:60px">类型</th><th>标题</th>' +
+      '<th style="width:130px">作者</th><th style="width:150px">发布时间</th><th style="width:150px">下载时间</th>' +
+      '<th>保存路径</th><th style="width:60px">操作</th></tr></thead><tbody>' + rows + "</tbody></table></div>" +
+      '<div class="pager"><span>第 ' + data.page + " / " + state.archiveTotalPages + " 页</span>" +
+      '<button class="btn ghost mini" id="arPrev"' + (data.page <= 1 ? " disabled" : "") + ">上一页</button>" +
+      '<button class="btn ghost mini" id="arNext"' + (data.page >= state.archiveTotalPages ? " disabled" : "") + ">下一页</button></div>";
+
+    const prev = document.getElementById("arPrev");
+    const next = document.getElementById("arNext");
+    if (prev) prev.addEventListener("click", function () { state.archivePage = Math.max(1, data.page - 1); loadArchive(); });
+    if (next) next.addEventListener("click", function () { state.archivePage = Math.min(state.archiveTotalPages, data.page + 1); loadArchive(); });
+  } catch (err) {
+    box.innerHTML = '<div class="empty" style="color:var(--err)">' + esc(err.message) + "</div>";
+  }
+}
+
+document.getElementById("arResult").addEventListener("click", function (evt) {
+  const btn = evt.target.closest("button[data-copy]");
+  if (btn && btn.dataset.copy) copyText(btn.dataset.copy);
+});
+
+/* ============================ 配置中心 ============================ */
+function settingsSchema() {
+  return [
+    { title: "基础", fields: [
+      { p: "path", t: "text", l: "下载目录" },
+      { p: "thread", t: "number", l: "并发线程数" },
+      { p: "rate_limit", t: "number", l: "限速（请求/秒）" },
+      { p: "retry_times", t: "number", l: "失败重试次数" },
+      { p: "proxy", t: "text", l: "HTTP 代理（留空为不使用）" }
+    ] },
+    { title: "下载内容", fields: [
+      { p: "video", t: "switch", l: "视频本体" },
+      { p: "cover", t: "switch", l: "封面图" },
+      { p: "music", t: "switch", l: "背景音乐" },
+      { p: "avatar", t: "switch", l: "作者头像" },
+      { p: "json", t: "switch", l: "原始 JSON" },
+      { p: "folderstyle", t: "switch", l: "按作品建子目录" },
+      { p: "download_pinned", t: "switch", l: "包含置顶作品" },
+      { p: "author_url", t: "switch", l: "保存主页地址文本" },
+      { p: "homepage_screenshot", t: "switch", l: "保存主页首屏截图" }
+    ] },
+    { title: "默认下载范围", fields: [
+      { p: "mode", t: "modes", l: "默认模式" },
+      { p: "video_quality", t: "select", l: "下载画质", opts: QUALITIES },
+      { p: "start_time", t: "text", l: "起始日期（YYYY-MM-DD）" },
+      { p: "end_time", t: "text", l: "结束日期（YYYY-MM-DD）" }
+    ] },
+    { title: "增量下载", fields: [
+      { p: "redownload_missing_files", t: "switch", l: "磁盘文件缺失时重新下载" },
+      { p: "increase.post", t: "switch", l: "post 增量" },
+      { p: "increase.like", t: "switch", l: "like 增量" },
+      { p: "increase.mix", t: "switch", l: "mix 增量" },
+      { p: "increase.music", t: "switch", l: "music 增量" }
+    ] },
+    { title: "命名与目录", fields: [
+      { p: "filename_template", t: "text", l: "文件名模板（须含 {id}）" },
+      { p: "folder_template", t: "text", l: "目录名模板（须含 {id}）" },
+      { p: "author_dir", t: "select", l: "作者目录层命名", opts: [["nickname", "nickname · 仅昵称"], ["sec_uid", "sec_uid · 稳定唯一"], ["nickname_uid", "nickname_uid · 昵称_uid"]] },
+      { p: "group_by_mode", t: "switch", l: "按模式再分子目录" }
+    ] },
+    { title: "评论采集", fields: [
+      { p: "comments.enabled", t: "switch", l: "启用评论采集" },
+      { p: "comments.include_replies", t: "switch", l: "包含二级回复" },
+      { p: "comments.max_comments", t: "number", l: "评论上限（0 = 不限）" },
+      { p: "comments.page_size", t: "number", l: "分页大小" }
+    ] },
+    { title: "直播录制", fields: [
+      { p: "live.max_duration_seconds", t: "number", l: "最长录制秒数（0 = 录到下播）" },
+      { p: "live.chunk_size", t: "number", l: "分块字节数" },
+      { p: "live.idle_timeout_seconds", t: "number", l: "空闲超时秒数" }
+    ] },
+    { title: "视频转写", fields: [
+      { p: "transcript.enabled", t: "switch", l: "启用转写" },
+      { p: "transcript.model", t: "text", l: "模型" },
+      { p: "transcript.output_dir", t: "text", l: "输出目录（留空 = 与视频同目录）" },
+      { p: "transcript.api_url", t: "text", l: "接口地址" },
+      { p: "transcript.api_key_env", t: "text", l: "密钥环境变量名" }
+    ] },
+    { title: "完成通知", fields: [
+      { p: "notifications.enabled", t: "switch", l: "启用通知" },
+      { p: "notifications.on_success", t: "switch", l: "成功时通知" },
+      { p: "notifications.on_failure", t: "switch", l: "失败时通知" },
+      { p: "notifications.providers", t: "json", l: "providers（JSON 数组，bark/telegram/webhook）" }
+    ] },
+    { title: "浏览器兜底", fields: [
+      { p: "browser_fallback.enabled", t: "switch", l: "启用浏览器兜底" },
+      { p: "browser_fallback.headless", t: "switch", l: "无头模式（关闭便于人工过验证码）" },
+      { p: "browser_fallback.max_scrolls", t: "number", l: "最大滚动次数" },
+      { p: "browser_fallback.wait_timeout_seconds", t: "number", l: "等待超时（秒）" }
+    ] },
+    { title: "服务端", fields: [
+      { p: "server.max_jobs", t: "number", l: "内存保留任务数上限" },
+      { p: "server.job_ttl_seconds", t: "number", l: "完成任务保留秒数" },
+      { p: "auto_cookie", t: "switch", l: "自动读取 Cookie 文件" }
+    ] }
+  ];
+}
+
+async function loadConfig() {
+  const form = document.getElementById("cfgForm");
+  form.innerHTML = '<div class="card"><div class="empty">正在读取配置…</div></div>';
+  try {
+    const data = await api("/api/v1/config");
+    state.config = data.config;
+    state.configMeta = data;
+    const crypto = data.config && data.config.cookies ? "（凭据已脱敏，不通过网页修改）" : "";
+    document.getElementById("cfgPath").innerHTML =
+      '<span class="k">配置文件路径</span><span class="v">' + esc(data.config_path || "未指定（仅内存生效）") + "</span>";
+    renderConfigForm();
+    if (crypto) toast("Cookie 等凭据未下发到浏览器", "ok");
+  } catch (err) {
+    form.innerHTML = '<div class="card"><div class="empty" style="color:var(--err)">读取配置失败：' + esc(err.message) + "</div></div>";
+  }
+}
+
+function renderConfigForm() {
+  const cfg = state.config || {};
+  document.getElementById("cfgForm").innerHTML = settingsSchema().map(function (group) {
+    return '<div class="card"><h3>' + esc(group.title) + '</h3><div class="grid g3" style="margin-top:12px">' +
+      group.fields.map(function (f) { return renderField(f, cfg); }).join("") + "</div></div>";
+  }).join("");
+}
+
+function renderField(f, cfg) {
+  const raw = getPath(cfg, f.p);
+  if (f.t === "switch") {
+    return '<label class="sw" style="margin:0"><input type="checkbox" data-path="' + esc(f.p) + '" data-kind="switch"' +
+      (raw ? " checked" : "") + "><span>" + esc(f.l) + "</span></label>";
+  }
+  if (f.t === "select") {
+    return '<label class="field" style="margin:0"><span>' + esc(f.l) + "</span><select data-path=\"" + esc(f.p) + '" data-kind="select">' +
+      f.opts.map(function (o) {
+        return '<option value="' + esc(o[0]) + '"' + (String(raw) === String(o[0]) ? " selected" : "") + ">" + esc(o[1]) + "</option>";
+      }).join("") + "</select></label>";
+  }
+  if (f.t === "modes") {
+    const on = Array.isArray(raw) ? raw : [];
+    return '<div style="grid-column:1/-1"><span style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">' + esc(f.l) + '</span><div class="chips" id="cfgModes">' +
+      Object.keys(MODE_LABELS).map(function (m) {
+        return '<div class="chip' + (on.indexOf(m) >= 0 ? " on" : "") + '" data-cfgmode="' + m + '">' + esc(MODE_LABELS[m]) + "</div>";
+      }).join("") + "</div></div>";
+  }
+  if (f.t === "json") {
+    return '<label class="field" style="grid-column:1/-1;margin:0"><span>' + esc(f.l) + "</span><textarea rows=\"4\" data-path=\"" +
+      esc(f.p) + '" data-kind="json">' + esc(JSON.stringify(raw === undefined ? [] : raw, null, 2)) + "</textarea></label>";
+  }
+  const type = f.t === "number" ? "number" : "text";
+  const value = raw === undefined || raw === null ? "" : raw;
+  return '<label class="field" style="margin:0"><span>' + esc(f.l) + '</span><input type="' + type + '" data-path="' +
+    esc(f.p) + '" data-kind="' + esc(f.t) + '" value="' + esc(value) + '"></label>';
+}
+
+document.getElementById("cfgForm").addEventListener("click", function (evt) {
+  const chip = evt.target.closest(".chip[data-cfgmode]");
+  if (!chip) return;
+  chip.classList.toggle("on");
+});
+document.getElementById("cfgReload").addEventListener("click", function () { state.config = null; loadConfig(); });
+
+document.getElementById("cfgSave").addEventListener("click", async function () {
+  const updates = {};
+  const problems = [];
+  const inputs = document.querySelectorAll("#cfgForm [data-path]");
+  for (let i = 0; i < inputs.length; i++) {
+    const el = inputs[i];
+    const path = el.dataset.path;
+    const kind = el.dataset.kind;
+    let value;
+    if (kind === "switch") value = el.checked;
+    else if (kind === "number") {
+      if (el.value === "") continue;
+      value = Number(el.value);
+      if (isNaN(value)) { problems.push(path + " 不是有效数字"); continue; }
+    } else if (kind === "json") {
+      try { value = JSON.parse(el.value || "[]"); }
+      catch (e) { problems.push(path + " 不是合法 JSON"); continue; }
+    } else {
+      value = el.value;
+    }
+    if (JSON.stringify(getPath(state.config, path)) !== JSON.stringify(value)) setPath(updates, path, value);
+  }
+  const modeChips = document.querySelectorAll("#cfgModes .chip.on");
+  const modes = Array.prototype.map.call(modeChips, function (c) { return c.dataset.cfgmode; });
+  if (JSON.stringify(getPath(state.config, "mode")) !== JSON.stringify(modes)) updates.mode = modes;
+
+  if (problems.length) { toast("校验未通过：" + problems.join("；"), "err"); return; }
+  if (!Object.keys(updates).length) { toast("没有需要保存的改动", "warn"); return; }
+
+  const btn = this; btn.disabled = true; btn.textContent = "保存中…";
+  try {
+    const res = await api("/api/v1/config", { method: "PUT", body: { updates: updates } });
+    toast(res.saved ? "已写入 " + (res.config_path || "config.yml") : (res.note || "仅进程内生效"), res.saved ? "ok" : "warn");
+    state.config = null;
+    await loadConfig();
+    loadStats();
+  } catch (err) {
+    toast("保存失败：" + err.message, "err");
+  }
+  btn.disabled = false; btn.textContent = "保存配置";
+});
+
+/* ============================ 启动 ============================ */
+initDownloadTab();
+if (state.base) ping(); else ping();
+activateTab("overview");
+</script>
+</body>
+</html>

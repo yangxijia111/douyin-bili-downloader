@@ -26,6 +26,29 @@
 
 _截图来自当前桌面端 `main` 构建；为保护隐私，界面内容使用演示数据。_
 
+## 网页可视化控制台
+
+项目内置一个单文件网页控制台（`web/index.html`），由 REST 服务模式托管，用浏览器即可完成下载配置、任务跟踪、数据发现与档案浏览。启动后访问 `http://127.0.0.1:8000/`。
+
+```bash
+pip install fastapi uvicorn        # 一次性可选依赖
+python run.py --serve --serve-port 8000
+```
+
+| 页签 | 能做什么 |
+|------|----------|
+| 总览 | 服务状态、Cookie 状态、运行参数、任务分布、近 30 天热门作者、**下载目录一键打开 / 复制路径** |
+| 链接下载 | 多链接批量提交；**可直接粘贴 App 的整条分享文案**，会自动提取其中的链接并忽略多余文字；模式（post/like/mix/music/collect/collectmix）、数量、画质、时间范围、内容开关、评论采集、视频转写 —— 均**仅对本次提交生效**，不写入配置文件 |
+| 任务中心 | 实时**进度条**（已处理/总数、逐文件字节进度）、阶段与当前作品、暂停 / 继续 / 取消 / 重试 / **删除单条** / **清空已结束**、输出目录**打开文件夹 / 复制路径** |
+| 数据发现 | 热搜榜抓取、关键词搜索，导出 JSONL 快照 |
+| 下载档案 | `download_manifest.jsonl` 清单浏览 + SQLite 历史分页与作者/标题/类型筛选 |
+| 配置中心 | 在线编辑并保存 `config.yml`（凭据字段不下发浏览器，无法通过网页修改） |
+
+> 下载是后台异步执行的：提交后页面会自动跳到「任务中心」，可实时看进度、暂停或取消。
+> 暂停是**协作式**的——单文件传输途中无法中断（流式下载不经过限速器），所以在「当前作品下载完成、下一次请求之前」生效；对作者主页这类批量任务即为逐条暂停。
+>
+> 控制台完全离线可用，不依赖任何 CDN。若前后端分离部署，在顶栏「API 地址」填入服务端地址即可。
+
 ## 功能概览
 
 ### 已支持
@@ -333,9 +356,26 @@ python run.py --serve --serve-port 8000
 
 | Method | Path | 说明 |
 |--------|------|------|
-| POST | `/api/v1/download` | 提交 `{"url": "..."}`，返回 `{job_id, status}` |
-| GET | `/api/v1/jobs/{job_id}` | 查询指定 job 的状态/计数 |
+| GET | `/` | 网页可视化控制台（`web/index.html`） |
+| POST | `/api/v1/download` | 提交 `{"url": "...", "overrides": {...}}`，返回 `{job_id, status}`；`overrides` 可给单个链接单独指定 mode/number/画质/时间范围等 |
+| GET | `/api/v1/jobs/{job_id}` | 查询指定 job 的状态、计数与实时进度（step/detail/processed/current 字节进度/output_dirs） |
 | GET | `/api/v1/jobs` | 列出最近的 job（按 TTL + 容量剪裁） |
+| POST | `/api/v1/jobs/{job_id}/retry` | 按原链接与参数重新入队 |
+| POST | `/api/v1/jobs/{job_id}/pause` | 暂停任务（当前作品下完后停止，下一次请求前生效） |
+| POST | `/api/v1/jobs/{job_id}/resume` | 继续已暂停的任务 |
+| POST | `/api/v1/jobs/{job_id}/cancel` | 取消排队中或下载中的任务（已下载文件保留） |
+| DELETE | `/api/v1/jobs/{job_id}` | 删除单条任务记录（活跃的先取消；磁盘文件保留） |
+| DELETE | `/api/v1/jobs` | 批量清理任务，默认只清终态（成功/失败/已取消）；`?include_active=true` 连在跑的也清 |
+| GET | `/api/v1/config` | 读取配置（Cookie / api_key 已脱敏） |
+| PUT | `/api/v1/config` | 保存白名单内的配置项并写回 `config.yml`，同时热更新并发/限速/重试 |
+| GET | `/api/v1/cookies/status` | Cookie 配置与有效性状态（不含值） |
+| GET | `/api/v1/stats` | 服务版本、任务分布、运行参数、档案总量、热门作者 |
+| GET | `/api/v1/history` | SQLite 历史分页，支持 `author` / `title` / `aweme_type` 过滤 |
+| GET | `/api/v1/manifest` | 读取 `download_manifest.jsonl` 最近 N 条 |
+| GET | `/api/v1/download-dir` | 下载根目录的绝对路径与是否存在 |
+| POST | `/api/v1/open-folder` | 用系统文件管理器打开下载目录或其中子目录（**仅限下载目录内路径**，越界返回 403） |
+| GET | `/api/v1/discovery/hot-board` | 抓取热搜榜并导出 JSONL |
+| GET | `/api/v1/discovery/search` | 关键词搜索并导出 JSONL |
 | GET | `/api/v1/health` | 健康探针 |
 
 完成态的 job 会按 TTL（默认 24 小时）+ 最大数量（默认 500）自动剪裁；in-flight 的 job 永不被裁掉。
