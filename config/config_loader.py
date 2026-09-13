@@ -62,6 +62,8 @@ class ConfigLoader:
                 )
         if os.getenv("DOUYIN_PROXY"):
             env_config["proxy"] = os.getenv("DOUYIN_PROXY")
+        if os.getenv("BILIBILI_COOKIE"):
+            env_config["bilibili"] = {"cookie": os.getenv("BILIBILI_COOKIE")}
         return env_config
 
     def _normalize_mix_aliases(
@@ -144,7 +146,10 @@ class ConfigLoader:
         for key, value in kwargs.items():
             if key in self.config:
                 if isinstance(self.config[key], dict) and isinstance(value, dict):
-                    self.config[key].update(value)
+                    # 嵌套 section 用深合并：调用方往往只给一个子键（如
+                    # bilibili.increase 的某一项），整体替换会把默认配置里
+                    # 其余类型的值全部丢掉。与 YAML 加载的 _merge_config 语义一致。
+                    self.config[key] = self._merge_config(self.config[key], value)
                 else:
                     self.config[key] = value
             else:
@@ -269,6 +274,33 @@ class ConfigLoader:
 
     def _parse_cookie_string(self, cookie_str: str) -> Dict[str, str]:
         return sanitize_cookies(parse_cookie_header(cookie_str))
+
+    def get_bilibili_cookies(self) -> Dict[str, str]:
+        """解析 ``bilibili.cookies`` / ``bilibili.cookie`` 为字典。
+
+        与抖音的 ``cookies`` 分开存放：两个平台的凭据互不通用，混在一个字典里
+        会在请求另一个平台时把无效 Cookie 一起发出去。
+        """
+        section = self.config.get("bilibili")
+        if not isinstance(section, dict):
+            return {}
+        raw = section.get("cookies") or section.get("cookie")
+        if isinstance(raw, str):
+            if not raw.strip():
+                return {}
+            return self._parse_cookie_string(raw)
+        if isinstance(raw, dict):
+            return sanitize_cookies(raw)
+        return {}
+
+    def get_bilibili_enabled(self) -> bool:
+        section = self.config.get("bilibili")
+        if not isinstance(section, dict):
+            return True
+        value = section.get("enabled", True)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
 
     def _auto_cookie_enabled(self) -> bool:
         raw_value = self.config.get("auto_cookie")

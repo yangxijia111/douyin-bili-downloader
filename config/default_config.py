@@ -122,4 +122,59 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "max_jobs": 500,  # 内存中保留的 job 条数上限（不含 in-flight）
         "job_ttl_seconds": 86400,  # 完成态 job 保留时间（秒）
     },
+    # 哔哩哔哩下载（可选）。link 里出现 bilibili.com / b23.tv 链接或裸 BV 号时
+    # 自动启用；抖音侧的所有开关（path / 命名模板 / 线程 / 代理 / 数据库 /
+    # 时间范围 / 通知）对 B 站同样生效，这里只放 B 站独有的部分。
+    "bilibili": {
+        # 总开关。关闭后 B 站链接会被明确拒绝而不是静默跳过。
+        "enabled": True,
+        # 登录凭据。SESSDATA 是唯一必需项：没有它只能拿到 360P/480P，且收藏夹
+        # 接口直接返回 -101。bili_jct / buvid3 可选（buvid3 缺失会自动领取）。
+        # 两种写法等价：
+        #   cookie: "SESSDATA=xxx; bili_jct=yyy"
+        #   cookies: {SESSDATA: xxx, bili_jct: yyy}
+        "cookie": "",
+        "cookies": {},
+        # 画质偏好：highest / lowest / 8k / dolby / hdr / 4k / 1080p60 /
+        # 1080p+ / 1080p / 720p60 / 720p / 480p / 360p / 240p。
+        # 指定档位不可用时自动降级到最接近的可用档；实际可用上限由账号权限
+        # 决定（未登录 480P、登录 1080P、大会员 4K/8K/HDR/杜比）。
+        "quality": "highest",
+        # 音频轨偏好：highest（无损/杜比/192K 优先）或 lowest。
+        "audio_quality": "highest",
+        # 视频编码偏好：auto / avc / hevc / av1。auto 按 avc→hevc→av1 兼容性
+        # 优先选择；指定编码不存在时自动退回可用编码。
+        "codec": "auto",
+        # 只下载音频轨（保存为 .m4a）。适合当播客/音乐收藏用。
+        "audio_only": False,
+        # 附带产物开关。默认全关，与抖音侧保持一致的「只拿主媒体」策略。
+        "download_cover": False,
+        "download_subtitle": False,
+        "download_danmaku": False,
+        "download_json": False,
+        # UP 主投稿排序：pubdate（最新发布）/ click（最多播放）/ stow（最多收藏）。
+        "user_order": "pubdate",
+        # 接口之间的最小请求间隔（秒）。B 站风控对同账号高频请求敏感，调小会
+        # 提高被拦截概率。
+        "request_interval": 0.5,
+        # ffmpeg 路径。留空则用打包内置的 ffmpeg，其次搜索 PATH。
+        # DASH 音视频合并必须依赖 ffmpeg。
+        "ffmpeg_path": "",
+        # 各链接类型的数量上限，0 = 不限。
+        "number": {
+            "video": 0,
+            "user": 0,
+            "collection": 0,
+            "series": 0,
+            "favlist": 0,
+        },
+        # 各链接类型是否启用磁盘增量（按 bvid 判定，多 P 稿件按分 P 粒度补齐）。
+        "increase": {
+            "video": True,
+            "user": True,
+            "collection": True,
+            "series": True,
+            "favlist": True,
+        },
+    },
 }

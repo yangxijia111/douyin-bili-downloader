@@ -53,3 +53,10 @@ config/cookies.json
 .vscode/
 .omc/
 .gstack/
+
+# Agent / local tooling state
+.mimosa/
+.workbuddy/
+.hypothesis/
+_run_tests.py
+_pytest_out.txt

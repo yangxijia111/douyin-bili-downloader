@@ -13,6 +13,7 @@ Covers task 1.2 of the desktop-ux-overhaul spec:
 """
 
 import json
+import re
 
 import aiosqlite
 
@@ -39,10 +40,13 @@ _LEGACY_AWEME_DDL = """
 """
 
 
-async def _table_columns(db_path: str, table: str):
-    """Return the set of column names for the given table via PRAGMA."""
+async def _table_columns(db_path: str):
+    """Return the set of column names for the ``aweme`` table via PRAGMA.
+
+    PRAGMA 不支持参数绑定，表名直接使用本测试中的字面量，避免任何拼接。
+    """
     async with aiosqlite.connect(db_path) as conn:
-        cursor = await conn.execute(f"PRAGMA table_info({table})")
+        cursor = await conn.execute("PRAGMA table_info(aweme)")
         rows = await cursor.fetchall()
     return {row[1] for row in rows}
 
@@ -68,13 +72,13 @@ async def test_initialize_adds_author_sec_uid_to_legacy_db(tmp_path):
         )
         await raw.commit()
 
-    pre_cols = await _table_columns(str(db_path), "aweme")
+    pre_cols = await _table_columns(str(db_path))
     assert "author_sec_uid" not in pre_cols, "fixture should start pre-migration"
 
     db = Database(db_path=str(db_path))
     await db.initialize()
     try:
-        post_cols = await _table_columns(str(db_path), "aweme")
+        post_cols = await _table_columns(str(db_path))
         assert "author_sec_uid" in post_cols
 
         # Legacy row must still exist and the new column defaults to NULL.
@@ -99,7 +103,7 @@ async def test_initialize_is_idempotent_on_same_instance(tmp_path):
         # Second call on the same instance must not raise and must leave the
         # schema intact.
         await db.initialize()
-        cols = await _table_columns(db.db_path, "aweme")
+        cols = await _table_columns(db.db_path)
         assert "author_sec_uid" in cols
     finally:
         await db.close()
@@ -117,7 +121,7 @@ async def test_initialize_is_idempotent_across_instances(tmp_path):
     db2 = Database(db_path=path)
     try:
         await db2.initialize()
-        cols = await _table_columns(path, "aweme")
+        cols = await _table_columns(path)
         assert "author_sec_uid" in cols
     finally:
         await db2.close()
@@ -330,7 +334,7 @@ async def test_migration_adds_cover_urls_and_backfills_from_metadata(tmp_path):
     db = Database(db_path=db_path)
     await db.initialize()
     try:
-        cols = await _table_columns(db_path, "aweme")
+        cols = await _table_columns(db_path)
         assert "cover_urls" in cols
         assert "job_id" in cols
 

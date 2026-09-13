@@ -1,10 +1,17 @@
 # 抖音下载器 V2.0（Douyin Downloader）
 
+**中文** | [English](./README.md)
+
 <p align="center">
-  <img src="https://socialify.git.ci/jiji262/douyin-downloader/image?custom_description=%E6%8A%96%E9%9F%B3%E6%89%B9%E9%87%8F%E4%B8%8B%E8%BD%BD%E5%B7%A5%E5%85%B7%EF%BC%8C%E5%8E%BB%E6%B0%B4%E5%8D%B0%EF%BC%8C%E6%94%AF%E6%8C%81%E8%A7%86%E9%A2%91%E3%80%81%E5%9B%BE%E9%9B%86%E3%80%81%E4%BD%9C%E8%80%85%E4%B8%BB%E9%A1%B5%E6%89%B9%E9%87%8F%E4%B8%8B%E8%BD%BD%E3%80%82&description=1&font=Jost&forks=1&logo=https%3A%2F%2Fraw.githubusercontent.com%2Fjiji262%2Fdouyin-downloader%2Frefs%2Fheads%2Fmain%2Fimg%2Flogo.png&name=1&owner=1&pattern=Circuit+Board&pulls=1&stargazers=1&theme=Light" alt="douyin-downloader" width="820" />
+    <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
+    <img src="https://img.shields.io/badge/Python-3.8%2B-blue.svg" alt="Python 3.8+" />
+    <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg" alt="Platform" />
+    <a href="https://linux.do" alt="LINUX DO">
+        <img
+            src="https://img.shields.io/badge/LINUX-DO-FFB003.svg?logo=data:image/svg%2bxml;base64,DQo8c3ZnIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxMDAiPjxwYXRoIGQ9Ik00Ni44Mi0uMDU1aDYuMjVxMjMuOTY5IDIuMDYyIDM4IDIxLjQyNmM1LjI1OCA3LjY3NiA4LjIxNSAxNi4xNTYgOC44NzUgMjUuNDV2Ni4yNXEtMi4wNjQgMjMuOTY4LTIxLjQzIDM4LTExLjUxMiA3Ljg4NS0yNS40NDUgOC44NzRoLTYuMjVxLTIzLjk3LTIuMDY0LTM4LjAwNC0yMS40M1EuOTcxIDY3LjA1Ni0uMDU0IDUzLjE4di02LjQ3M0MxLjM2MiAzMC43ODEgOC41MDMgMTguMTQ4IDIxLjM3IDguODE3IDI5LjA0NyAzLjU2MiAzNy41MjcuNjA0IDQ2LjgyMS0uMDU2IiBzdHlsZT0ic3Ryb2tlOm5vbmU7ZmlsbC1ydWxlOmV2ZW5vZGQ7ZmlsbDojZWNlY2VjO2ZpbGwtb3BhY2l0eToxIi8+PHBhdGggZD0iTTQ3LjI2NiAyLjk1N3EyMi41My0uNjUgMzcuNzc3IDE1LjczOGE0OS43IDQ5LjcgMCAwIDEgNi44NjcgMTAuMTU3cS00MS45NjQuMjIyLTgzLjkzIDAgOS43NS0xOC42MTYgMzAuMDI0LTI0LjM4N2E2MSA2MSAwIDAgMSA5LjI2Mi0xLjUwOCIgc3R5bGU9InN0cm9rZTpub25lO2ZpbGwtcnVsZTpldmVub2RkO2ZpbGw6IzE5MTkxOTtmaWxsLW9wYWNpdHk6MSIvPjxwYXRoIGQ9Ik03Ljk4IDcwLjkyNmMyNy45NzctLjAzNSA1NS45NTQgMCA4My45My4xMTNRODMuNDI2IDg3LjQ3MyA2Ni4xMyA5NC4wODZxLTE4LjgxIDYuNTQ0LTM2LjgzMi0xLjg5OC0xNC4yMDMtNy4wOS0yMS4zMTctMjEuMjYyIiBzdHlsZT0ic3Ryb2tlOm5vbmU7ZmlsbC1ydWxlOmV2ZW5vZGQ7ZmlsbDojZjlhZjAwO2ZpbGwtb3BhY2l0eToxIi8+PC9zdmc+" /></a>
 </p>
 
-一个面向实用场景的抖音下载工具，支持视频、图文、合集、音乐、收藏夹等多种类型下载，以及作者主页批量下载，默认带进度展示、重试、数据库去重、下载完整性校验和浏览器兜底能力。
+一个面向实用场景的抖音下载工具，支持视频、图文、合集、音乐、收藏夹等多种类型下载，以及作者主页批量下载，默认带进度展示、重试、数据库去重、下载完整性校验和浏览器兜底能力。同时内置**哔哩哔哩下载**：单稿件（含分 P）、UP 主投稿、合集 / 系列、收藏夹、`b23.tv` 短链，链接与抖音混用时按域名自动分流。
 
 ## 桌面版（Douzy）
 
@@ -60,6 +67,7 @@ python run.py --serve --serve-port 8000
 | 单个合集下载 | `/collection/{mix_id}`、`/mix/{mix_id}` |
 | 单个音乐下载 | `/music/{music_id}`（优先原声文件，缺失时回退到该音乐下首条作品） |
 | 短链自动解析 | `https://v.douyin.com/...`、`v.iesdouyin.com`，含裸 host |
+| **哔哩哔哩下载** | 单稿件（`?p=N` 可指定分 P）、UP 主投稿、合集 / 系列、收藏夹（需登录）、`b23.tv` 短链；DASH 音视频自动合并，画质 / 编码 / 音质可配置，增量按 bvid + 分 P 粒度补齐（详见 `config.example.yml` 的 `bilibili` 段） |
 | 用户主页批量下载 | `/user/{sec_uid}` + `mode: [post, like, mix, music]` |
 | 当前登录账号收藏夹下载 | `/user/self?showTab=favorite_collection` + `mode: [collect, collectmix]` |
 | 无水印优先 | 自动选择无水印视频源 |
@@ -357,7 +365,7 @@ python run.py --serve --serve-port 8000
 | Method | Path | 说明 |
 |--------|------|------|
 | GET | `/` | 网页可视化控制台（`web/index.html`） |
-| POST | `/api/v1/download` | 提交 `{"url": "...", "overrides": {...}}`，返回 `{job_id, status}`；`overrides` 可给单个链接单独指定 mode/number/画质/时间范围等 |
+| POST | `/api/v1/download` | 提交 `{"url": "...", "overrides": {...}}`，返回 `{job_id, status}`；`overrides` 可给单个链接单独指定 mode/number/画质/时间范围等；链接按域名自动分流，B 站链接同样支持 |
 | GET | `/api/v1/jobs/{job_id}` | 查询指定 job 的状态、计数与实时进度（step/detail/processed/current 字节进度/output_dirs） |
 | GET | `/api/v1/jobs` | 列出最近的 job（按 TTL + 容量剪裁） |
 | POST | `/api/v1/jobs/{job_id}/retry` | 按原链接与参数重新入队 |
@@ -547,6 +555,30 @@ Downloaded/
             └── ..._room.json
 ```
 
+## 项目结构
+
+```text
+douyin-downloader/
+├── run.py                  # 程序入口
+├── config.example.yml      # 示例配置 —— 复制为 config.yml 后编辑
+├── pyproject.toml          # 构建配置、依赖、CLI 入口
+├── requirements.txt        # 运行依赖
+├── Dockerfile              # Docker 部署
+├── core/                   # 抖音：API 客户端、下载器（视频/主页/合集/音乐/直播）、评论、热搜发现、ffmpeg
+├── bilibili/               # 哔哩哔哩：链接解析、WBI 签名、DASH 流、下载器（单稿件/UP 主/合集/收藏夹）
+├── auth/                   # Cookie 与 msToken 管理
+├── cli/                    # CLI 入口、进度展示、登录流程、转写
+├── config/                 # 配置加载与默认值
+├── control/                # 队列管理、限速、重试
+├── server/                 # REST API 服务（FastAPI）与任务管理
+├── storage/                # SQLite 数据库、文件管理、元数据
+├── tools/                  # cookie_fetcher、watch_server
+├── utils/                  # Cookie 工具、命名模板、日志等
+├── web/                    # 单文件网页控制台（index.html）
+├── tests/                  # Pytest 测试
+└── img/                    # README 截图与 Logo
+```
+
 ## 重新下载
 
 程序通过**数据库记录 + 本地文件**双重检查判断是否跳过已下载内容。要重新下载，需要按以下方式清理数据：
@@ -632,6 +664,45 @@ sqlite3 dy_downloader.db "SELECT aweme_id, title, author_name, datetime(download
 - 如平台规则、接口策略变更导致功能失效，属于正常技术风险
 
 如果你继续使用本项目，即视为已阅读并同意上述声明。
+
+## 贡献说明
+
+欢迎提交 Issue 和 Pull Request！
+
+1. Fork 本仓库并从 `main` 创建你的分支
+2. 安装依赖：`pip install -r requirements.txt -r requirements.lock`（开发工具：`pytest`、`ruff`）
+3. 完成修改，必要时补充测试
+4. 运行测试并确保全部通过：
+
+   ```bash
+   pytest -q
+   ```
+
+5. 运行代码检查：
+
+   ```bash
+   ruff check .
+   ```
+
+6. 提交 Pull Request 并附清晰的说明
+
+> 报告 Bug 与贡献代码同样重要——提交 Issue 时请附上操作系统、Python 版本和脱敏后的日志（切勿粘贴真实 Cookie 或 Token）。
+
+## 更新计划
+
+- [x] 哔哩哔哩下载支持（单稿件、UP 主投稿、合集 / 系列、收藏夹、短链）
+- [x] 网页控制台：实时进度条、任务级暂停 / 继续 / 取消、下载档案浏览
+- [ ] `like` / `mix` / `music` 模式的浏览器兜底（当前仅 `post` 完整验证）
+- [ ] 收藏夹模式（`collect` / `collectmix`）的增量截断
+- [ ] 直播 HLS 录制可播放输出（当前 FLV 原生保存；HLS 仅保存 playlist）
+- [ ] 桌面版（Douzy）公开内测
+
+## 致谢
+
+- [jiji262/douyin-downloader](https://github.com/jiji262/douyin-downloader) —— 本项目在其基础上扩展开发，抖音核心、CLI 框架与文档结构源自上游
+- [Rich](https://github.com/Textualize/rich) —— 进度条展示
+- [FastAPI](https://github.com/fastapi/fastapi) 与 [Uvicorn](https://github.com/encode/uvicorn) —— REST API 服务
+- [Playwright](https://github.com/microsoft/playwright) —— 浏览器兜底与自动获取 Cookie
 
 ## 许可证
 

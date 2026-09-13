@@ -227,7 +227,7 @@ tbody tr:hover{background:var(--bg3)}
       <section class="panel" id="panel-download">
         <div class="card">
           <h3>下载链接</h3>
-          <p class="hint">每行一个链接，也<b>可以直接粘贴抖音 App 的整条分享文案</b>——会自动提取其中的链接并忽略多余文字。支持 <b>作者主页批量下载</b>、视频 / 图文 / 合集 / 音乐 / 收藏夹 / 直播间，短链会自动解析。</p>
+          <p class="hint">每行一个链接，也<b>可以直接粘贴抖音 App 的整条分享文案</b>——会自动提取其中的链接并忽略多余文字。支持 <b>作者主页批量下载</b>、视频 / 图文 / 合集 / 音乐 / 收藏夹 / 直播间，短链会自动解析；<b>B 站链接同样支持</b>（单稿件、UP 主投稿、合集 / 系列、收藏夹、b23.tv 短链、裸 BV 号），按域名自动分流。</p>
           <textarea id="dlLinks" rows="6" placeholder="作者主页（批量下载该博主作品）：&#10;https://www.douyin.com/user/MS4wLjABAAAA6O7EZyfDRYXxJrUTpf91K3tmB4rBROkAw-nYMfld8ss&#10;&#10;单条作品：&#10;https://www.douyin.com/video/7604129988555574538"></textarea>
           <div class="row" style="margin-top:10px">
             <button class="btn ghost mini" id="dlDemoAuthor">示例 · 作者主页批量</button>
@@ -507,6 +507,15 @@ function shortUrl(url) {
 
 function urlTypeOf(url) {
   const s = String(url || "");
+  // B 站链接先于抖音判定：域名不重叠，且 B 站也有 /video/ 路径。
+  if (/bilibili\.com|b23\.tv/i.test(s) || /^BV[0-9A-Za-z]{10}$/.test(s.trim())) {
+    if (/\/bangumi\/|\/cheese\//i.test(s)) return "B站·番剧/课程";
+    if (/space\.bilibili\.com\/\d+\/favlist|\/list\/ml/i.test(s)) return "B站·收藏夹";
+    if (/collectiondetail|seriesdetail|\/list\/\d+/i.test(s)) return "B站·合集/系列";
+    if (/space\.bilibili\.com/i.test(s)) return "B站·UP主";
+    if (/\/video\/|^BV/i.test(s)) return "B站·视频";
+    return "B站链接";
+  }
   const pairs = [
     [/\/video\//, "视频"], [/\/note\/|\/gallery\//, "图文"],
     [/\/collection\/|\/mix\//, "合集"], [/\/music\//, "音乐"],
@@ -771,6 +780,9 @@ document.getElementById("dlLinks").addEventListener("input", detectLinks);
 // 所以不能把整行当 URL 用，必须先把链接抠出来。
 const URL_IN_TEXT = /https?:\/\/[^\s<>"'）)】\]，。、；！？]+/i;
 const BARE_DOUYIN = /(?:v\.|www\.|live\.)?(?:douyin|iesdouyin)\.com\/[^\s<>"'）)】\]，。、；！？]*|webcast\.amemv\.com\/[^\s<>"'）)】\]，。、；！？]*/i;
+// B 站裸域名（space.bilibili.com/... 、b23.tv/... 等）与裸 BV 号。
+const BARE_BILI = /(?:www\.|space\.|m\.)?bilibili\.com\/[^\s<>"'）)】\]，。、；！？]*|b23\.tv\/[^\s<>"'）)】\]，。、；！？]*/i;
+const BARE_BVID = /(^|[^0-9A-Za-z])(BV[0-9A-Za-z]{10})(?![0-9A-Za-z])/;
 
 function stripTrailingJunk(s) {
   return String(s).replace(/[.,;:!?)\]}>）】、，。；：！？]+$/, "");
@@ -783,6 +795,10 @@ function extractUrl(line) {
   if (full) return stripTrailingJunk(full[0]);
   const bare = text.match(BARE_DOUYIN);
   if (bare) return "https://" + stripTrailingJunk(bare[0]);
+  const bareBili = text.match(BARE_BILI);
+  if (bareBili) return "https://" + stripTrailingJunk(bareBili[0]);
+  const bareBvid = text.match(BARE_BVID);
+  if (bareBvid) return bareBvid[2];
   return "";
 }
 
@@ -824,7 +840,7 @@ function detectLinks() {
   }
   if (skipped) {
     html += '<div style="margin-top:8px;font-size:12.5px;color:var(--err)">有 ' + skipped +
-      " 行没识别出链接，已跳过。请确认粘贴的是抖音链接。</div>";
+      " 行没识别出链接，已跳过。请确认粘贴的是抖音 / B 站链接。</div>";
   }
   if (!urls.length) { box.innerHTML = html; return; }
 

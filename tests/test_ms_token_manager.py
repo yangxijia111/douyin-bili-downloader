@@ -142,7 +142,7 @@ class _FakeResponse:
 
 
 def _fake_urlopen(*, conf_error=None, conf_yaml="", mssdk_token=_MSSDK_TOKEN, calls):
-    def urlopen(request, timeout=None):  # noqa: ARG001
+    def fake_open(request, timeout=None):  # noqa: ARG001
         url = request if isinstance(request, str) else request.full_url
         calls.append(url)
         if url == MsTokenManager.F2_CONF_URL:
@@ -153,7 +153,7 @@ def _fake_urlopen(*, conf_error=None, conf_yaml="", mssdk_token=_MSSDK_TOKEN, ca
             return _FakeResponse()
         return _FakeResponse(set_cookies=[f"msToken={mssdk_token}; Path=/"])
 
-    return urlopen
+    return fake_open
 
 
 def test_bundled_conf_matches_generation_contract():

@@ -37,8 +37,8 @@ class ProgressDisplay:
     def show_banner(self):
         banner = """
 ╔══════════════════════════════════════════╗
-║     Douyin Downloader v2.0.0            ║
-║     抖音批量下载工具                     ║
+║     Video Batch Downloader v2.0.0        ║
+║     抖音 / 哔哩哔哩 批量下载工具          ║
 ╚══════════════════════════════════════════╝
         """
         self._active_console().print(banner, style="bold cyan")

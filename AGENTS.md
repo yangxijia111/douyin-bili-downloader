@@ -22,6 +22,7 @@ A Python-based Douyin (TikTok China) batch downloader that fetches videos, galle
 | Directory | Purpose |
 |-----------|---------|
 | `auth/` | Cookie and MS token management (see `auth/AGENTS.md`) |
+| `bilibili/` | Bilibili downloads (single video incl. multi-page, user uploads, collections/series, favourites, `b23.tv` short links). Parallel implementation to `core/` with its own domain model (bvid/cid/WBI signing/DASH) that reuses only the infra layer (`storage`, `control`, `cli` progress, `utils.naming`). Also hosts `security.py`: outbound-URL scheme whitelist + private/reserved-address blocklist applied to every stream/subtitle/short-link request. Platform routing happens in `cli.main.download_url` / `server.app._execute_download` before any client is built (`bilibili.url_parser.detect_platform`). |
 | `cli/` | CLI argument parsing, main async loop, progress display (see `cli/AGENTS.md`) |
 | `config/` | YAML config loading, env var overrides, defaults (see `config/AGENTS.md`) |
 | `control/` | Concurrency control — rate limiter, retry handler, queue manager (see `control/AGENTS.md`) |

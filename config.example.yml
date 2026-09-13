@@ -142,6 +142,100 @@ server:
   max_jobs: 500
   job_ttl_seconds: 86400   # 完成态 job 保留 24 小时
 
+# ============================================================================
+# 哔哩哔哩下载（可选）
+# ----------------------------------------------------------------------------
+# 触发方式：把 B 站链接混进上面的 link 列表即可，程序按域名自动分流。支持：
+#   https://www.bilibili.com/video/BV1xx411c7mD         单稿件（多 P 自动全下）
+#   https://www.bilibili.com/video/BV1xx411c7mD?p=3     只下第 3 P
+#   BV1xx411c7mD / av170001                             裸 ID 直接粘贴
+#   https://space.bilibili.com/271779326/video          UP 主全部投稿（批量）
+#   https://space.bilibili.com/1/channel/collectiondetail?sid=123   合集
+#   https://space.bilibili.com/1/channel/seriesdetail?sid=123       系列
+#   https://space.bilibili.com/1/favlist?fid=123         收藏夹（需登录）
+#   https://b23.tv/xxxxxx                              站内短链（自动展开）
+#
+# 抖音侧的大部分配置对 B 站同样生效：path、thread、retry_times、proxy、
+# start_time / end_time、filename_template / folder_template、folderstyle、
+# author_dir、group_by_mode、database、notifications。
+#
+# 输出目录结构与抖音一致，按来源分模式层：
+#   Downloaded/{UP主}/post/2026-01-01_标题_BV1xx411c7mD/...
+#   Downloaded/{UP主}/collection/{合集名}/...        （合集 / 系列各自成层）
+#   Downloaded/{UP主}/favlist/{收藏夹名}/...          （收藏夹内稿件 UP 主各异，
+#                                                     作者目录仍是稿件真实 UP 主）
+bilibili:
+  enabled: true
+
+  # 登录凭据。SESSDATA 是唯一必需项：
+  #   - 未登录：清晰度上限 480P，收藏夹接口直接返回 -101 不可用；
+  #   - 登录：1080P；
+  #   - 大会员登录：1080P+ / 4K / 8K / HDR / 杜比视界 / 无损音频。
+  # 获取方式：浏览器登录 bilibili.com → F12 → Application → Cookies →
+  # https://www.bilibili.com → 复制 SESSDATA 的值。
+  # 两种等价写法，二选一即可（cookies 字典优先级更高）：
+  #   cookie: "SESSDATA=xxxxxxxx; bili_jct=yyyyyyyy"
+  cookies:
+    SESSDATA: ""
+    bili_jct: ""
+    # buvid3 留空会自动向 B 站领取，一般无需手填。
+
+  # 画质偏好。可选值：
+  #   highest   最高可用档（默认，实际上限由账号权限决定）
+  #   lowest    最低档（省流量）
+  #   8k / dolby / hdr / 4k / 1080p60 / 1080p+ / 1080p / 720p60 / 720p /
+  #   480p / 360p / 240p
+  # 指定档位不可用时自动降级到最接近的可用档。
+  quality: highest
+
+  # 音频轨偏好：highest（无损 FLAC / 杜比 / 192K 优先）或 lowest。
+  audio_quality: highest
+
+  # 视频编码偏好：auto（avc→hevc→av1 兼容性优先）/ avc / hevc / av1。
+  # 指定的编码在该稿件不存在时自动退回可用编码，不会失败。
+  codec: auto
+
+  # 只下载音频轨，保存为 .m4a。适合当播客 / 音乐收藏用。
+  audio_only: false
+
+  # 附带产物开关（默认全关，与抖音侧「只拿主媒体」的策略一致）：
+  #   download_cover     封面 {stem}_cover.jpg
+  #   download_subtitle  字幕 {stem}.{语言}.srt（含 AI 字幕，需登录）
+  #   download_danmaku   弹幕 {stem}.danmaku.xml
+  #   download_json      接口原始数据 {stem}_data.json
+  download_cover: false
+  download_subtitle: false
+  download_danmaku: false
+  download_json: false
+
+  # UP 主投稿排序：pubdate（最新发布）/ click（最多播放）/ stow（最多收藏）。
+  # pubdate 下会启用时间下界提前收敛，增量任务只需翻到新稿件所在页。
+  user_order: pubdate
+
+  # 接口之间的最小请求间隔（秒）。B 站风控对同账号高频请求敏感，不建议调小。
+  request_interval: 0.5
+
+  # ffmpeg 路径。DASH 音视频合并依赖 ffmpeg；留空时用打包内置的静态二进制，
+  # 其次搜索系统 PATH。
+  ffmpeg_path: ""
+
+  # 各链接类型的数量上限，0 = 不限。
+  number:
+    video: 0
+    user: 0
+    collection: 0
+    series: 0
+    favlist: 0
+
+  # 各链接类型是否启用磁盘增量。按 bvid 判定；多 P 稿件按分 P 粒度补齐，
+  # 例如上次只下到第 1 P，重跑会补下第 2 P 起的内容。
+  increase:
+    video: true
+    user: true
+    collection: true
+    series: true
+    favlist: true
+
 cookies:
   msToken: YOUR_MS_TOKEN
   ttwid: YOUR_TTWID

@@ -29,6 +29,16 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from auth import CookieManager
+from bilibili import (
+    BiliAPIClient,
+    BiliDownloaderFactory,
+    BiliLoginRequiredError,
+    BiliRiskControlError,
+    BiliURLParser,
+    detect_platform,
+)
+from bilibili.factory import UNSUPPORTED_URL_TYPE_DETAIL as BILI_UNSUPPORTED_URL_TYPE_DETAIL
+from bilibili.url_parser import is_bili_short_url, normalize_short_url
 from config import ConfigLoader
 from control import QueueManager, RateLimiter, RetryHandler
 from core import UNSUPPORTED_URL_TYPE_DETAIL, DouyinAPIClient, DownloaderFactory, URLParser
@@ -37,7 +47,8 @@ from server.jobs import CURRENT_JOB, DownloadJob, JobManager
 from server.progress import JobProgressReporter
 from storage import Database, FileManager
 from utils.logger import setup_logger
-from utils.validators import is_short_url, normalize_short_url
+from utils.validators import is_short_url
+from utils.validators import normalize_short_url as normalize_douyin_short_url
 
 logger = setup_logger("REST")
 
@@ -87,6 +98,8 @@ _EDITABLE_CONFIG_KEYS = (
 )
 
 # 单次提交允许覆盖的配置键（不落盘，只作用于该 job）。
+# ``bilibili`` 允许整段传入：ConfigLoader.update 对 dict 深合并，网页端可以只
+# 覆盖 bilibili.number / increase / quality 等子键而无需重发整段配置。
 _OVERRIDE_KEYS = frozenset(
     {
         "mode",
@@ -108,14 +121,15 @@ _OVERRIDE_KEYS = frozenset(
         "comments",
         "live",
         "transcript",
+        "bilibili",
     }
 )
 
 # 抖音 App「复制链接」拿到的其实是整条分享文案，例如：
 #   长按复制此条消息，打开抖音搜索，查看TA的更多作品。 https://v.douyin.com/xxxx/
-# 直接把这一整行当 URL 解析必然失败（落成 Unsupported URL）。下面两个正则
+# 直接把这一整行当 URL 解析必然失败（落成 Unsupported URL）。下面几个正则
 # 从任意文本里抠出真正的链接：先找带 scheme 的，再找裸域名（App 里也常出现
-# 不带 https:// 的 v.douyin.com/xxx）。
+# 不带 https:// 的 v.douyin.com/xxx），最后是 B 站裸 BV 号。
 _URL_IN_TEXT_RE = re.compile(r"https?://[^\s<>\"'）)】\]】，。、；！？]+", re.IGNORECASE)
 _BARE_DOUYIN_RE = re.compile(
     r"(?<![0-9A-Za-z._-])"
@@ -123,6 +137,13 @@ _BARE_DOUYIN_RE = re.compile(
     r"|webcast\.amemv\.com/[^\s<>\"'）)】\]】，。、；！？]*)",
     re.IGNORECASE,
 )
+_BARE_BILI_RE = re.compile(
+    r"(?<![0-9A-Za-z._-])"
+    r"((?:www\.|space\.|m\.)?bilibili\.com/[^\s<>\"'）)】\]】，。、；！？]*"
+    r"|b23\.tv/[^\s<>\"'）)】\]】，。、；！？]*)",
+    re.IGNORECASE,
+)
+_BARE_BVID_RE = re.compile(r"(?<![0-9A-Za-z])(BV[0-9A-Za-z]{10})(?![0-9A-Za-z])")
 _URL_TRAILING_JUNK = ".,;:!?)]}>）】、，。；：！？"
 
 
@@ -137,6 +158,12 @@ def extract_url_from_text(raw: str) -> str:
     match = _BARE_DOUYIN_RE.search(text)
     if match:
         return "https://" + match.group(1).rstrip(_URL_TRAILING_JUNK)
+    match = _BARE_BILI_RE.search(text)
+    if match:
+        return "https://" + match.group(1).rstrip(_URL_TRAILING_JUNK)
+    match = _BARE_BVID_RE.search(text)
+    if match:
+        return match.group(1)
     return text
 
 
@@ -211,6 +238,15 @@ def _redacted_config(config: Dict[str, Any]) -> Dict[str, Any]:
             out[key] = {k: ("***" if v else "") for k, v in value.items()}
         elif value:
             out[key] = "***"
+    # bilibili 段里的 cookie/cookies 同样是账号凭据（SESSDATA），一并脱敏。
+    bilibili = out.get("bilibili")
+    if isinstance(bilibili, dict):
+        for key in ("cookies", "cookie"):
+            value = bilibili.get(key)
+            if isinstance(value, dict):
+                bilibili[key] = {k: ("***" if v else "") for k, v in value.items()}
+            elif value:
+                bilibili[key] = "***"
     transcript = out.get("transcript")
     if isinstance(transcript, dict) and transcript.get("api_key"):
         transcript["api_key"] = "***"
@@ -406,6 +442,13 @@ async def _execute_download(
     reporter = JobProgressReporter(job) if job is not None else None
     limiter: Any = deps.rate_limiter if job is None else _PausableJobLimiter(deps.rate_limiter, job)
 
+    # 平台分流：B 站的 API 客户端、URL 解析与下载器都和抖音不通用，必须在建
+    # 任何客户端之前决定走哪条链路（与 cli.main.download_url 的分流一致）。
+    if detect_platform(url) == "bilibili":
+        return await _execute_bilibili_download(
+            url, deps, config, database, limiter, reporter, job
+        )
+
     # proxy 与 cli.main.download_url 对齐:API 请求、短链解析和 CDN 媒体
     # 下载(downloader_base 读 api_client.proxy)统一走配置代理。
     async with DouyinAPIClient(
@@ -413,7 +456,7 @@ async def _execute_download(
         proxy=config.get("proxy"),
     ) as api_client:
         if is_short_url(url):
-            resolved = await api_client.resolve_short_url(normalize_short_url(url))
+            resolved = await api_client.resolve_short_url(normalize_douyin_short_url(url))
             if not resolved:
                 raise RuntimeError(f"Failed to resolve short URL: {url}")
             url = resolved
@@ -449,6 +492,131 @@ async def _execute_download(
             "failed": result.failed,
             "skipped": result.skipped,
         }
+
+
+def _bili_config_snapshot(config: ConfigLoader) -> str:
+    """B 站任务的历史库配置快照：凭据（cookie/cookies）绝不入库。"""
+    section = config.get("bilibili")
+    snapshot = deepcopy(section) if isinstance(section, dict) else {}
+    if isinstance(snapshot, dict):
+        snapshot.pop("cookie", None)
+        snapshot.pop("cookies", None)
+    safe_config = {
+        k: v
+        for k, v in config.config.items()
+        if k not in ("cookies", "cookie", "transcript", "bilibili")
+    }
+    safe_config["bilibili"] = snapshot
+    return json.dumps(safe_config, ensure_ascii=False)
+
+
+async def _execute_bilibili_download(
+    url: str,
+    deps: "_ServerDeps",
+    config: ConfigLoader,
+    database: Optional[Database],
+    limiter: Any,
+    reporter: Optional[JobProgressReporter],
+    job: Optional["DownloadJob"],
+) -> Dict[str, int]:
+    """B 站链路：短链展开 → 解析 → 门禁 → 下载器 → 历史落库。
+
+    与 cli.main.download_bilibili_url 对齐；差别在报错方式——CLI 打印到终端，
+    这里抛 RuntimeError 落到 job.error，网页任务卡片才能显示可操作的原因。
+    """
+    if not config.get_bilibili_enabled():
+        raise RuntimeError(
+            "哔哩哔哩下载已在配置中关闭（bilibili.enabled: false）。"
+            "改为 true 或删除该配置项后重试。"
+        )
+
+    original_url = url
+    section = config.get("bilibili") if isinstance(config.get("bilibili"), dict) else {}
+    cookies = config.get_bilibili_cookies()
+
+    async with BiliAPIClient(
+        cookies,
+        proxy=config.get("proxy"),
+        request_interval=float(section.get("request_interval", 0.5) or 0),
+    ) as api_client:
+        if reporter:
+            reporter.update_step("解析链接", "检查 B 站短链并解析 URL")
+        if is_bili_short_url(url):
+            resolved = await api_client.resolve_short_url(normalize_short_url(url))
+            if not resolved:
+                raise RuntimeError(f"B 站短链展开失败：{url}")
+            url = resolved
+
+        parsed = BiliURLParser.parse(url)
+        if not parsed:
+            raise RuntimeError(f"无法解析为受支持的 B 站链接：{url}")
+
+        gated_detail = BILI_UNSUPPORTED_URL_TYPE_DETAIL.get(str(parsed.get("type") or ""))
+        if gated_detail:
+            raise RuntimeError(gated_detail)
+
+        # 登录态探测：只在「配了 Cookie」或「该类型必须要登录」时做一次，
+        # 把「拿不到高清 / 收藏夹不可用」在下载开始前讲清楚。
+        needs_login = parsed.get("type") == "favlist"
+        if cookies or needs_login:
+            await api_client.ensure_wbi_keys()
+        if needs_login and api_client.is_login is not True:
+            raise RuntimeError(
+                "收藏夹接口需要登录：请在 config.yml 的 bilibili.cookies 中填入 SESSDATA。"
+            )
+        if not cookies:
+            logger.info("bilibili cookies not configured; quality capped at 480P")
+
+        if reporter:
+            reporter.update_step("创建下载器", f"B 站 · {parsed['type']}")
+        downloader = BiliDownloaderFactory.create(
+            parsed["type"],
+            config=config,
+            api_client=api_client,
+            file_manager=deps.file_manager,
+            database=database,
+            rate_limiter=limiter,
+            retry_handler=deps.retry_handler,
+            queue_manager=deps.queue_manager,
+            progress_reporter=reporter,
+            job_id=job.job_id if job is not None else None,
+        )
+        if downloader is None:
+            raise RuntimeError(f"No downloader for url_type=bilibili:{parsed['type']}")
+
+        try:
+            result = await downloader.download(parsed)
+        except BiliLoginRequiredError as exc:
+            raise RuntimeError(
+                f"该链接需要登录态（{exc.message or '账号未登录'}）。"
+                "请在 config.yml 的 bilibili.cookies 中填入 SESSDATA 后重试。"
+            ) from exc
+        except BiliRiskControlError as exc:
+            raise RuntimeError(
+                f"被 B 站风控拦截（{exc.message or exc.code}）。"
+                "可尝试调大 bilibili.request_interval、调小 thread，或稍后重试。"
+            ) from exc
+
+    if database:
+        try:
+            await database.add_history(
+                {
+                    "url": original_url,
+                    "url_type": f"bilibili:{parsed['type']}",
+                    "total_count": result.total,
+                    "success_count": result.success,
+                    "config": _bili_config_snapshot(config),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - 落库失败不吞下载结果
+            logger.warning("Failed to record bilibili history for %s: %s", original_url, exc)
+
+    return {
+        "total": result.total,
+        "success": result.success,
+        "failed": result.failed,
+        "skipped": result.skipped,
+    }
 
 
 def _read_manifest_tail(path: Path, limit: int) -> List[Dict[str, Any]]:

@@ -1,18 +1,18 @@
 # Douyin Downloader V2.0
 
-<p align="center">
-  <img src="https://socialify.git.ci/jiji262/douyin-downloader/image?custom_description=Douyin+batch+download+tool%2C+remove+watermarks%2C+support+batch+download+of+videos%2C+gallery%2C+and+author+homepages.&description=1&font=Source+Code+Pro&forks=1&owner=1&pattern=Circuit+Board&stargazers=1&theme=Light" alt="douyin-downloader" width="820" />
-</p>
+[中文](./README.zh-CN.md) | **English**
 
 <p align="center">
+    <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
+    <img src="https://img.shields.io/badge/Python-3.8%2B-blue.svg" alt="Python 3.8+" />
+    <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg" alt="Platform" />
     <a href="https://linux.do" alt="LINUX DO">
         <img
             src="https://img.shields.io/badge/LINUX-DO-FFB003.svg?logo=data:image/svg%2bxml;base64,DQo8c3ZnIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxMDAiPjxwYXRoIGQ9Ik00Ni44Mi0uMDU1aDYuMjVxMjMuOTY5IDIuMDYyIDM4IDIxLjQyNmM1LjI1OCA3LjY3NiA4LjIxNSAxNi4xNTYgOC44NzUgMjUuNDV2Ni4yNXEtMi4wNjQgMjMuOTY4LTIxLjQzIDM4LTExLjUxMiA3Ljg4NS0yNS40NDUgOC44NzRoLTYuMjVxLTIzLjk3LTIuMDY0LTM4LjAwNC0yMS40M1EuOTcxIDY3LjA1Ni0uMDU0IDUzLjE4di02LjQ3M0MxLjM2MiAzMC43ODEgOC41MDMgMTguMTQ4IDIxLjM3IDguODE3IDI5LjA0NyAzLjU2MiAzNy41MjcuNjA0IDQ2LjgyMS0uMDU2IiBzdHlsZT0ic3Ryb2tlOm5vbmU7ZmlsbC1ydWxlOmV2ZW5vZGQ7ZmlsbDojZWNlY2VjO2ZpbGwtb3BhY2l0eToxIi8+PHBhdGggZD0iTTQ3LjI2NiAyLjk1N3EyMi41My0uNjUgMzcuNzc3IDE1LjczOGE0OS43IDQ5LjcgMCAwIDEgNi44NjcgMTAuMTU3cS00MS45NjQuMjIyLTgzLjkzIDAgOS43NS0xOC42MTYgMzAuMDI0LTI0LjM4N2E2MSA2MSAwIDAgMSA5LjI2Mi0xLjUwOCIgc3R5bGU9InN0cm9rZTpub25lO2ZpbGwtcnVsZTpldmVub2RkO2ZpbGw6IzE5MTkxOTtmaWxsLW9wYWNpdHk6MSIvPjxwYXRoIGQ9Ik03Ljk4IDcwLjkyNmMyNy45NzctLjAzNSA1NS45NTQgMCA4My45My4xMTNRODMuNDI2IDg3LjQ3MyA2Ni4xMyA5NC4wODZxLTE4LjgxIDYuNTQ0LTM2LjgzMi0xLjg5OC0xNC4yMDMtNy4wOS0yMS4zMTctMjEuMjYyIiBzdHlsZT0ic3Ryb2tlOm5vbmU7ZmlsbC1ydWxlOmV2ZW5vZGQ7ZmlsbDojZjlhZjAwO2ZpbGwtb3BhY2l0eToxIi8+PC9zdmc+" /></a>
 </p>
-中文文档 (Chinese): [README.zh-CN.md](./README.zh-CN.md)
 
 
-A practical Douyin downloader supporting videos, image-notes, collections, music, favorites collections, and profile batch downloads, with progress display, retries, SQLite deduplication, download integrity checks, and browser fallback support.
+A practical Douyin downloader supporting videos, image-notes, collections, music, favorites collections, and profile batch downloads, with progress display, retries, SQLite deduplication, download integrity checks, and browser fallback support. Built-in **Bilibili support**: single videos (multi-page), user uploads, collections/series, favourites, and `b23.tv` short links — links are auto-routed by domain when Douyin and Bilibili are mixed.
 
 ## Desktop App (Douzy)
 
@@ -68,6 +68,7 @@ python run.py --serve --serve-port 8000
 | Single collection download | `/collection/{mix_id}` and `/mix/{mix_id}` |
 | Single music download | `/music/{music_id}` (prefers direct audio, fallback to first related aweme) |
 | Short link parsing | `https://v.douyin.com/...`, `v.iesdouyin.com`, bare hosts |
+| **Bilibili download** | Single videos (`?p=N` selects a page), user uploads, collections/series, favourites (login required), `b23.tv` short links; DASH audio/video auto-merged; configurable quality/codec/audio; incremental resume per bvid + page (see the `bilibili` section in `config.example.yml`) |
 | Profile batch download | `/user/{sec_uid}` + `mode: [post, like, mix, music]` |
 | Logged-in favorites collections | `/user/self?showTab=favorite_collection` + `mode: [collect, collectmix]` |
 | No-watermark preferred | Automatically selects watermark-free video source |
@@ -367,7 +368,7 @@ Endpoints:
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/` | Web console (`web/index.html`) |
-| POST | `/api/v1/download` | Submit `{"url": "...", "overrides": {...}}`, returns `{job_id, status}`; `overrides` scopes mode/number/quality/time range per link |
+| POST | `/api/v1/download` | Submit `{"url": "...", "overrides": {...}}`, returns `{job_id, status}`; `overrides` scopes mode/number/quality/time range per link; URLs are auto-routed by platform, Bilibili links included |
 | GET | `/api/v1/jobs/{job_id}` | Get a job's status, counts, and live progress (step/detail/processed/current byte progress/output_dirs) |
 | GET | `/api/v1/jobs` | List recent jobs (TTL + capacity capped) |
 | POST | `/api/v1/jobs/{job_id}/retry` | Re-queue a job with its original url and overrides |
@@ -544,6 +545,30 @@ workspace/
                 └── ..._room.json
 ```
 
+## Project Structure
+
+```text
+douyin-downloader/
+├── run.py                  # Entry point
+├── config.example.yml      # Example config — copy to config.yml and edit
+├── pyproject.toml          # Build config, dependencies, CLI entry point
+├── requirements.txt        # Runtime dependencies
+├── Dockerfile              # Docker deployment
+├── core/                   # Douyin: API client, downloaders (video/user/mix/music/live), comments, discovery, ffmpeg
+├── bilibili/               # Bilibili: URL parser, WBI signing, DASH streams, downloaders (video/user/collection/fav)
+├── auth/                   # Cookie & msToken management
+├── cli/                    # CLI entry, progress display, login flow, transcription
+├── config/                 # Config loading & defaults
+├── control/                # Queue manager, rate limiter, retry handler
+├── server/                 # REST API server (FastAPI) & job management
+├── storage/                # SQLite database, file manager, metadata
+├── tools/                  # cookie_fetcher, watch_server
+├── utils/                  # Cookie utils, naming, logging, etc.
+├── web/                    # Single-file web console (index.html)
+├── tests/                  # Pytest suite
+└── img/                    # README screenshots & logo
+```
+
 ## Re-downloading Content
 
 The program uses a **database record + local file** dual check to decide whether to skip already-downloaded content. To force re-download, you need to clean up accordingly:
@@ -628,6 +653,45 @@ This project is for technical research, learning, and personal data management o
 - If platform policies or interfaces change and features break, this is a normal technical risk
 
 By continuing to use this project, you acknowledge and accept the statements above.
+
+## Contributing
+
+Issues and Pull Requests are welcome!
+
+1. Fork this repository and create your branch from `main`
+2. Install dependencies: `pip install -r requirements.txt -r requirements.lock` (dev tools: `pytest`, `ruff`)
+3. Make your changes and add tests where applicable
+4. Run the test suite and make sure it passes:
+
+   ```bash
+   pytest -q
+   ```
+
+5. Run the linter:
+
+   ```bash
+   ruff check .
+   ```
+
+6. Submit a Pull Request with a clear description
+
+> Bug reports are just as valuable as code — when filing an issue, please include your platform, Python version, and redacted logs (never paste real cookies or tokens).
+
+## Roadmap
+
+- [x] Bilibili download support (single videos, user uploads, collections/series, favourites, short links)
+- [x] Web console: live progress bars, per-job pause/resume/cancel, archive browser
+- [ ] Browser fallback coverage for `like` / `mix` / `music` modes (currently `post` only)
+- [ ] Incremental stop for favorites-collection modes (`collect` / `collectmix`)
+- [ ] Playable output for live HLS recordings (currently FLV native; HLS saves the playlist only)
+- [ ] Desktop app (Douzy) public beta
+
+## Acknowledgements
+
+- [jiji262/douyin-downloader](https://github.com/jiji262/douyin-downloader) — this project is built on top of it; the Douyin core, CLI framework, and documentation structure originate from upstream
+- [Rich](https://github.com/Textualize/rich) — progress display
+- [FastAPI](https://github.com/fastapi/fastapi) & [Uvicorn](https://github.com/encode/uvicorn) — REST API server
+- [Playwright](https://github.com/microsoft/playwright) — browser fallback and automatic cookie capture
 
 ## License
 

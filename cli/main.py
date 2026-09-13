@@ -7,6 +7,21 @@ from pathlib import Path
 from typing import Any
 
 from auth import CookieManager
+from bilibili import (
+    BiliAPIClient,
+    BiliDownloaderFactory,
+    BiliLoginRequiredError,
+    BiliRiskControlError,
+    BiliURLParser,
+    detect_platform,
+)
+from bilibili.factory import UNSUPPORTED_URL_TYPE_DETAIL as BILI_UNSUPPORTED_URL_TYPE_DETAIL
+from bilibili.url_parser import (
+    is_bili_short_url,
+)
+from bilibili.url_parser import (
+    normalize_short_url as normalize_bili_short_url,
+)
 from cli.login_flow import can_interactive_login, interactive_relogin
 from cli.progress_display import ProgressDisplay
 from config import ConfigLoader
@@ -85,6 +100,21 @@ async def download_url(
     rate_limiter = RateLimiter(max_per_second=float(config.get("rate_limit", 2) or 2))
     retry_handler = RetryHandler(max_retries=config.get("retry_times", 3))
     queue_manager = QueueManager(max_workers=int(config.get("thread", 5) or 5))
+
+    # 平台分流：抖音与 B 站的 API 客户端、URL 解析、下载器三者都不可互换，
+    # 必须在建任何客户端之前决定走哪条链路。识别不出平台时按抖音处理，
+    # 让抖音侧的解析器给出「不支持的链接」而不是在这里静默丢弃。
+    if detect_platform(url) == "bilibili":
+        return await download_bilibili_url(
+            url,
+            config,
+            file_manager,
+            rate_limiter,
+            retry_handler,
+            queue_manager,
+            database=database,
+            progress_reporter=progress_reporter,
+        )
 
     original_url = url
 
@@ -193,6 +223,169 @@ async def download_url(
         return result
 
 
+async def download_bilibili_url(
+    url: str,
+    config: ConfigLoader,
+    file_manager: FileManager,
+    rate_limiter: RateLimiter,
+    retry_handler: RetryHandler,
+    queue_manager: QueueManager,
+    database: Database = None,
+    progress_reporter: ProgressDisplay = None,
+):
+    """B 站链路：短链展开 → URL 解析 → 能力门禁 → 下载器 → 历史落库。
+
+    与抖音链路的差别只在客户端与解析器：限速/重试/并发/文件管理/进度上报/
+    数据库全部复用同一套实例，由 :func:`download_url` 建好传进来。
+    """
+    if not config.get_bilibili_enabled():
+        if progress_reporter:
+            progress_reporter.update_step("解析链接", "B 站下载已在配置中关闭")
+        display.print_error(
+            "哔哩哔哩下载已在配置中关闭（bilibili.enabled: false）。"
+            "改为 true 或删除该配置项后重试。"
+        )
+        return None
+
+    original_url = url
+    section = config.get("bilibili") if isinstance(config.get("bilibili"), dict) else {}
+    cookies = config.get_bilibili_cookies()
+
+    async with BiliAPIClient(
+        cookies,
+        proxy=config.get("proxy"),
+        request_interval=float(section.get("request_interval", 0.5) or 0),
+    ) as api_client:
+        if progress_reporter:
+            progress_reporter.advance_step("解析链接", "检查 B 站短链并解析 URL")
+        if is_bili_short_url(url):
+            resolved_url = await api_client.resolve_short_url(normalize_bili_short_url(url))
+            if resolved_url:
+                url = resolved_url
+            else:
+                if progress_reporter:
+                    progress_reporter.update_step("解析链接", "短链解析失败")
+                display.print_error(f"B 站短链展开失败：{url}")
+                return None
+
+        parsed = BiliURLParser.parse(url)
+        if not parsed:
+            if progress_reporter:
+                progress_reporter.update_step("解析链接", "URL 解析失败")
+            display.print_error(f"无法解析为受支持的 B 站链接：{url}")
+            return None
+
+        gated_detail = BILI_UNSUPPORTED_URL_TYPE_DETAIL.get(str(parsed.get("type") or ""))
+        if gated_detail:
+            if progress_reporter:
+                progress_reporter.update_step("解析链接", gated_detail)
+            display.print_error(gated_detail)
+            return None
+
+        if not progress_reporter:
+            display.print_info(f"Platform: bilibili | URL type: {parsed['type']}")
+
+        # 登录态探测：只在「配了 Cookie」或「该类型必须要登录」时做一次，用于
+        # 在下载开始前就把「显然拿不到高清 / 收藏夹不可用」讲清楚，而不是等
+        # 下完一批 480P 才发现。
+        needs_login = parsed.get("type") == "favlist"
+        if cookies or needs_login:
+            await api_client.ensure_wbi_keys()
+        if not cookies:
+            display.print_warning(
+                "未配置 bilibili.cookies：清晰度上限 480P，收藏夹功能不可用。"
+                "在 config.yml 的 bilibili.cookies.SESSDATA 中填入登录凭据可解锁 1080P。"
+            )
+        elif api_client.is_login is False:
+            display.print_warning(
+                "bilibili.cookies 中的 SESSDATA 未能通过登录校验（可能已过期）。"
+                "请重新登录 B 站后复制新的 SESSDATA。"
+            )
+
+        if progress_reporter:
+            progress_reporter.advance_step("创建下载器", f"B 站 · {parsed['type']}")
+        downloader = BiliDownloaderFactory.create(
+            parsed["type"],
+            config=config,
+            api_client=api_client,
+            file_manager=file_manager,
+            database=database,
+            rate_limiter=rate_limiter,
+            retry_handler=retry_handler,
+            queue_manager=queue_manager,
+            progress_reporter=progress_reporter,
+        )
+        if not downloader:
+            if progress_reporter:
+                progress_reporter.update_step("创建下载器", "未找到匹配下载器")
+            display.print_error(f"No bilibili downloader found for type: {parsed['type']}")
+            return None
+
+        if progress_reporter:
+            progress_reporter.advance_step("执行下载", "开始拉取与下载资源")
+        try:
+            result = await downloader.download(parsed)
+        except BiliLoginRequiredError as exc:
+            if progress_reporter:
+                progress_reporter.update_step("执行下载", f"需要登录：{exc.message}")
+            display.print_error(
+                f"该链接需要登录态（{exc.message or '账号未登录'}）。"
+                f"请在 config.yml 的 bilibili.cookies 中填入 SESSDATA 后重试。"
+            )
+            return None
+        except BiliRiskControlError as exc:
+            if progress_reporter:
+                progress_reporter.update_step("执行下载", f"风控拦截：{exc.message}")
+            display.print_error(
+                f"被 B 站风控拦截（{exc.message or exc.code}）。"
+                f"可尝试调大 bilibili.request_interval、调小 thread，或稍后重试。"
+            )
+            return None
+        except Exception as exc:
+            if progress_reporter:
+                progress_reporter.update_step("执行下载", f"失败：{exc}")
+            display.print_error(f"B 站下载失败 for {url}: {exc}")
+            return None
+
+        if progress_reporter:
+            progress_reporter.advance_step(
+                "记录历史",
+                "写入数据库历史" if (result and database) else "数据库未启用，跳过",
+            )
+        if result and database:
+            safe_config = {
+                k: v
+                for k, v in config.config.items()
+                if k not in ("cookies", "cookie", "transcript", "bilibili")
+            }
+            # bilibili 段里的 cookie/cookies 是账号凭据，快照入库前必须剥掉。
+            bili_section = json.loads(json.dumps(config.get("bilibili") or {}))
+            if isinstance(bili_section, dict):
+                bili_section.pop("cookie", None)
+                bili_section.pop("cookies", None)
+            safe_config["bilibili"] = bili_section
+            await database.add_history(
+                {
+                    "url": original_url,
+                    "url_type": f"bilibili:{parsed['type']}",
+                    "total_count": result.total,
+                    "success_count": result.success,
+                    "config": json.dumps(safe_config, ensure_ascii=False),
+                }
+            )
+
+        if progress_reporter:
+            if result:
+                progress_reporter.advance_step(
+                    "收尾",
+                    f"成功 {result.success} / 失败 {result.failed} / 跳过 {result.skipped}",
+                )
+            else:
+                progress_reporter.advance_step("收尾", "无可统计结果")
+
+        return result
+
+
 async def main_async(args):
     if not args.serve:
         display.show_banner()
@@ -250,12 +443,17 @@ async def main_async(args):
         display.print_error("Invalid configuration: missing required fields")
         return
 
-    cookies = config.get_cookies()
-    cookie_manager = CookieManager()
-    cookie_manager.set_cookies(cookies)
+    urls = config.get_links()
+    # 平台分流在准备阶段就要落地：只有确实存在非 B 站链接时才去读写抖音的
+    # Cookie 文件。否则纯 B 站任务会用一个空字典覆盖掉用户的抖音登录态。
+    douyin_urls = [item for item in urls if detect_platform(item) != "bilibili"]
+    bilibili_urls = [item for item in urls if detect_platform(item) == "bilibili"]
 
-    if not cookie_manager.validate_cookies():
-        display.print_warning("Cookies may be invalid or incomplete")
+    cookie_manager = CookieManager()
+    if douyin_urls:
+        cookie_manager.set_cookies(config.get_cookies())
+        if not cookie_manager.validate_cookies():
+            display.print_warning("Cookies may be invalid or incomplete")
 
     database = None
     if config.get("database"):
@@ -264,8 +462,12 @@ async def main_async(args):
         await database.initialize()
         display.print_success("Database initialized")
 
-    urls = config.get_links()
     display.print_info(f"Found {len(urls)} URL(s) to process")
+    if bilibili_urls:
+        display.print_info(
+            f"其中哔哩哔哩链接 {len(bilibili_urls)} 个"
+            + ("（已配置登录 Cookie）" if config.get_bilibili_cookies() else "（未配置登录 Cookie，清晰度上限 480P）")
+        )
 
     all_results = []
     progress_config = config.get("progress", {}) or {}
@@ -371,13 +573,13 @@ async def _dispatch_notifications(config: ConfigLoader, total_result: Any, url_c
         return
 
     if total_result is None:
-        title = "抖音下载器：全部失败"
+        title = "视频下载：全部失败"
         body = f"共处理 {url_count} 个链接，无成功结果"
         level = "failure"
     else:
         fail_or_partial = total_result.failed > 0 or total_result.success == 0
         level = "failure" if fail_or_partial else "success"
-        title = "抖音下载完成" if level == "success" else "抖音下载部分失败"
+        title = "视频下载完成" if level == "success" else "视频下载部分失败"
         body = (
             f"链接 {url_count} / 总作品 {total_result.total} / "
             f"成功 {total_result.success} / 失败 {total_result.failed} / "

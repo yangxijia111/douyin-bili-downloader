@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import random
+import socket
 import string
 import time
+import urllib.parse
 import urllib.request
 from http.cookies import SimpleCookie
 from threading import Lock
@@ -59,6 +62,41 @@ class MsTokenManager:
         self.user_agent = user_agent
         self.conf_url = conf_url or self.F2_CONF_URL
         self.timeout_seconds = max(0.1, float(timeout_seconds))
+
+    @staticmethod
+    def _is_safe_http_url(url: str) -> bool:
+        """外发请求前的 URL 边界校验：仅放行 http(s)，且解析出的 IP
+        不得是环回、私有、链路本地、保留或多播地址，防止 SSRF。"""
+        try:
+            parsed = urllib.parse.urlsplit(url)
+        except ValueError:
+            return False
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            return False
+        default_port = 443 if parsed.scheme == "https" else 80
+        try:
+            infos = socket.getaddrinfo(
+                parsed.hostname, parsed.port or default_port, proto=socket.IPPROTO_TCP
+            )
+        except (socket.gaierror, UnicodeError, OSError):
+            return False
+        if not infos:
+            return False
+        for info in infos:
+            try:
+                ip = ipaddress.ip_address(info[4][0])
+            except ValueError:
+                return False
+            if (
+                ip.is_unspecified
+                or ip.is_loopback
+                or ip.is_private
+                or ip.is_link_local
+                or ip.is_multicast
+                or ip.is_reserved
+            ):
+                return False
+        return True
 
     @classmethod
     def _is_valid_ms_token(cls, token: Optional[str]) -> bool:
@@ -148,6 +186,10 @@ class MsTokenManager:
             },
             method="POST",
         )
+        # 防 SSRF：conf 来自远程 YAML，端点 URL 必须先过边界校验再发请求
+        if not self._is_safe_http_url(conf["url"]):
+            logger.warning("Rejected unsafe mssdk endpoint (SSRF guard)")
+            return None
 
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_seconds) as resp:
@@ -200,6 +242,10 @@ class MsTokenManager:
         return stale or self._bundled_conf()
 
     def _fetch_remote_conf(self) -> Optional[Dict[str, Any]]:
+        # 防 SSRF：conf_url 理论上可被参数覆盖，请求前必须过边界校验
+        if not self._is_safe_http_url(self.conf_url):
+            logger.warning("Rejected unsafe msToken conf URL (SSRF guard)")
+            return None
         try:
             with urllib.request.urlopen(self.conf_url, timeout=self.timeout_seconds) as resp:
                 raw = resp.read().decode("utf-8")
