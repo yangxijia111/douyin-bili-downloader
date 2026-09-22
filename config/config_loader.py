@@ -64,6 +64,8 @@ class ConfigLoader:
             env_config["proxy"] = os.getenv("DOUYIN_PROXY")
         if os.getenv("BILIBILI_COOKIE"):
             env_config["bilibili"] = {"cookie": os.getenv("BILIBILI_COOKIE")}
+        if os.getenv("YTDLP_COOKIE_FILE"):
+            env_config["ytdlp"] = {"cookie_file": os.getenv("YTDLP_COOKIE_FILE")}
         return env_config
 
     def _normalize_mix_aliases(
@@ -280,11 +282,46 @@ class ConfigLoader:
 
         与抖音的 ``cookies`` 分开存放：两个平台的凭据互不通用，混在一个字典里
         会在请求另一个平台时把无效 Cookie 一起发出去。
+
+        空值一律丢弃：``config.example.yml`` 自带 ``SESSDATA: ""`` 占位，用户照抄
+        模板但尚未填值时必须视同"未配置"——否则 CLI 会拿着空 Cookie 去做登录
+        校验，nav 直接抛 -101 把整条 B 站链路打断。
         """
         section = self.config.get("bilibili")
         if not isinstance(section, dict):
             return {}
         raw = section.get("cookies") or section.get("cookie")
+        if isinstance(raw, str):
+            parsed = self._parse_cookie_string(raw) if raw.strip() else {}
+        elif isinstance(raw, dict):
+            parsed = sanitize_cookies(raw)
+        else:
+            return {}
+        return {key: value for key, value in parsed.items() if value}
+
+    def get_bilibili_enabled(self) -> bool:
+        section = self.config.get("bilibili")
+        if not isinstance(section, dict):
+            return True
+        value = section.get("enabled", True)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    def get_ytdlp_cookies(self, platform: str) -> Dict[str, str]:
+        """解析 ``ytdlp.cookies.<platform>`` 为字典。
+
+        每个平台的凭据分开存放：把爱奇艺的 Cookie 发给腾讯视频没有意义，混在
+        一起还会让站方看到一堆无关字段。字符串（``k=v; k2=v2``）与字典两种写法
+        都接受，与 ``bilibili.cookie`` / ``bilibili.cookies`` 保持一致。
+        """
+        section = self.config.get("ytdlp")
+        if not isinstance(section, dict):
+            return {}
+        cookies = section.get("cookies")
+        if not isinstance(cookies, dict):
+            return {}
+        raw = cookies.get(str(platform or ""))
         if isinstance(raw, str):
             if not raw.strip():
                 return {}
@@ -293,11 +330,26 @@ class ConfigLoader:
             return sanitize_cookies(raw)
         return {}
 
-    def get_bilibili_enabled(self) -> bool:
-        section = self.config.get("bilibili")
+    def get_ytdlp_enabled(self) -> bool:
+        section = self.config.get("ytdlp")
         if not isinstance(section, dict):
             return True
-        value = section.get("enabled", True)
+        return self._truthy(section.get("enabled", True))
+
+    def get_ytdlp_platform_enabled(self, platform: str) -> bool:
+        """单个平台的开关；未声明的平台视为开启，总开关关闭时一律关闭。"""
+        if not self.get_ytdlp_enabled():
+            return False
+        section = self.config.get("ytdlp")
+        if not isinstance(section, dict):
+            return True
+        platforms = section.get("platforms")
+        if not isinstance(platforms, dict):
+            return True
+        return self._truthy(platforms.get(str(platform or ""), True))
+
+    @staticmethod
+    def _truthy(value: Any) -> bool:
         if isinstance(value, str):
             return value.strip().lower() in {"1", "true", "yes", "on"}
         return bool(value)

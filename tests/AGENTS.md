@@ -33,6 +33,9 @@ Pytest test suite with 23 test modules covering all major components. Uses `pyte
 | `test_user_mode_strategies.py` | Individual strategy behavior |
 | `test_video_downloader.py` | Video and gallery downloads |
 | `test_xbogus.py` | Anti-bot signature generation |
+| `test_ytdlp_url_parser.py` | yt-dlp platform domain detection; asserts no overlap with Douyin / Bilibili domains |
+| `test_ytdlp_downloader.py` | yt-dlp engine downloader with a fake `yt_dlp` module: output layout, DB/manifest rows, disk-incremental tokens, error classification, cookie file lifecycle, playlist expansion |
+| `test_ytdlp_integration.py` | CLI / Server routing to the ytdlp branch, `ytdlp.enabled` / per-platform gates, credential redaction, history snapshot stripping across all platforms, bare-domain URL extraction |
 
 ## For AI Agents
 

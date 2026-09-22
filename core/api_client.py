@@ -256,6 +256,7 @@ class DouyinAPIClient:
         cookies: Dict[str, str],
         proxy: Optional[str] = None,
         page_bridge: Optional[Any] = None,
+        page_bridge_proxy: Optional[str] = None,
     ):
         self.cookies = sanitize_cookies(cookies or {})
         self.proxy = str(proxy or "").strip()
@@ -264,6 +265,14 @@ class DouyinAPIClient:
         # ``await fetch(path, params, method=, data=)`` 返回带 http_status/body/text
         # 的对象,失败异常带 ``page_bridge_code``。
         self.page_bridge = page_bridge
+        # 未注入外部桥时，遇到 Argus 门禁(见 _request_json)自动懒建一个
+        # Playwright 页面桥(core/playwright_bridge.py)。外部注入则完全尊重之。
+        # 桥默认直连、不继承 ``proxy``——原因见 playwright_bridge 模块 docstring。
+        self._owns_page_bridge = page_bridge is None
+        self._page_bridge_proxy = str(page_bridge_proxy or "").strip()
+        # 已被 Argus 拒绝过的端点集合：后续对同一路径直接走桥，省掉每请求
+        # 一次注定 403 的 aiohttp 往返（也少触发一次风控计数）。
+        self._argus_blocked_paths: set = set()
         self._session: Optional[aiohttp.ClientSession] = None
         self._browser_post_aweme_items: Dict[str, Dict[str, Any]] = {}
         self._browser_post_stats: Dict[str, int] = {}
@@ -299,6 +308,83 @@ class DouyinAPIClient:
     async def close(self):
         if self._session and not self._session.closed:
             await self._session.close()
+        # 只回收自己懒建的桥；外部注入的桥归注入方管生命周期。
+        if self._owns_page_bridge and self.page_bridge is not None:
+            try:
+                await self.page_bridge.aclose()
+            except Exception as exc:  # noqa: BLE001 - 关闭路径尽力而为
+                logger.debug("Auto page bridge close failed: %s", exc)
+            self.page_bridge = None
+
+    def _ensure_auto_page_bridge(self) -> Optional[Any]:
+        """返回可用的页面桥；无外部注入时懒建 Playwright 桥，创建失败返回 None。"""
+        if self.page_bridge is not None:
+            return self.page_bridge
+        if not self._owns_page_bridge:
+            return None
+        try:
+            from core.playwright_bridge import PlaywrightPageBridge
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Page bridge unavailable: %s", exc)
+            return None
+        self.page_bridge = PlaywrightPageBridge(
+            self._browser_cookie_payload,
+            user_agent=self.headers["User-Agent"],
+            proxy=self._page_bridge_proxy or None,
+        )
+        return self.page_bridge
+
+    async def _fetch_via_page_bridge(
+        self,
+        path: str,
+        params: Dict[str, Any],
+        *,
+        method: str = "GET",
+        data: Optional[Dict[str, Any]] = None,
+        request_headers: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """Argus 门禁回退：经页面桥重发一次并折算成标准 payload。
+
+        桥不可用或桥内异常均按请求失败处理（返回 ``{}``）——Argus 拒绝是
+        确定性的，回到 aiohttp 重试没有意义。登录态失效照常向上抛。
+        """
+        bridge = self._ensure_auto_page_bridge()
+        if bridge is None:
+            return {}
+        started = time.monotonic()
+        logger.info(
+            "Douyin API request via page bridge (Argus fallback): path=%s method=%s",
+            path,
+            method.upper(),
+        )
+        try:
+            result = await bridge.fetch(
+                path, params, method=method.upper(), data=data, request_headers=request_headers
+            )
+        except LoginRequiredError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            if getattr(exc, "page_bridge_code", None) == "NOT_LOGGED_IN":
+                raise LoginRequiredError(0, "page bridge: not logged in", path) from exc
+            logger.error(
+                "Page bridge fallback failed: path=%s duration_ms=%d error_type=%s error=%s",
+                path,
+                _elapsed_ms(started),
+                type(exc).__name__,
+                _safe_error_text(exc),
+            )
+            return {}
+        status = int(getattr(result, "http_status", 0) or 0)
+        if status == 200:
+            return self._payload_from_bridge_result(result, path, started)
+        logger.error(
+            "Douyin API HTTP failure via page bridge: path=%s status=%s duration_ms=%d body=%r",
+            path,
+            status,
+            _elapsed_ms(started),
+            str(getattr(result, "text", "") or "")[:80],
+        )
+        return {}
 
     async def get_session(self) -> aiohttp.ClientSession:
         await self._ensure_session()
@@ -411,9 +497,15 @@ class DouyinAPIClient:
         method = method.upper()
         if method not in {"GET", "POST"}:
             raise ValueError(f"unsupported request method: {method}")
+        # 该路径本会话已被 Argus 拒绝过：直接走桥，不再浪费一次注定 403 的直连。
+        if path in self._argus_blocked_paths:
+            return await self._fetch_via_page_bridge(
+                path, params, method=method, data=data, request_headers=request_headers
+            )
         delays = [1, 2, 5]
         last_exc: Optional[Exception] = None
         risk_control_hit = False
+        argus_reason: Optional[str] = None
 
         for attempt in range(max_retries):
             started = time.monotonic()
@@ -493,6 +585,16 @@ class DouyinAPIClient:
                                 path,
                             )
                         return result
+                    if response.status == 403:
+                        # Argus 门禁的 403 是确定性的（缺 uifid / 签名），
+                        # 重试 aiohttp 无解，转入页面桥让页面 SDK 补签名。
+                        try:
+                            block_text = (await response.read()).decode("utf-8", "replace")
+                        except Exception:  # noqa: BLE001 - 读 body 失败按普通 403 处理
+                            block_text = ""
+                        if "ArgusSecurityPlugin" in block_text:
+                            argus_reason = " ".join(block_text.split())[:120]
+                            break
                     risk_control_hit = response.status in _RISK_CONTROL_HTTP_STATUSES
                     if response.status < 500 and not risk_control_hit:
                         log_fn = logger.info if suppress_error else logger.error
@@ -545,6 +647,18 @@ class DouyinAPIClient:
                     risk_control_hit,
                 )
                 await asyncio.sleep(delay)
+
+        if argus_reason is not None:
+            self._argus_blocked_paths.add(path)
+            logger.warning(
+                "Douyin API blocked by ArgusSecurityPlugin: path=%s reason=%r; "
+                "switching to page bridge for this and later calls",
+                path,
+                argus_reason,
+            )
+            return await self._fetch_via_page_bridge(
+                path, params, method=method, data=data, request_headers=request_headers
+            )
 
         log_fn = logger.info if suppress_error else logger.error
         log_fn(

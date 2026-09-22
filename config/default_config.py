@@ -177,4 +177,70 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "favlist": True,
         },
     },
+    # 其他知名视频平台（可选，yt-dlp 引擎）。link 里出现爱奇艺 / 腾讯视频 /
+    # 优酷 / 芒果 TV / 快手 / 西瓜视频 / 今日头条 / 微博 / 小红书 链接时自动
+    # 启用；需要 `pip install yt-dlp`。抖音侧的通用开关（path / 命名模板 /
+    # 线程 / 代理 / 数据库 / 增量）同样生效，这里只放引擎独有的部分。
+    #
+    # 能力边界：VIP 专享内容受 DRM 保护，任何工具都无法直接下载；免费内容与
+    # 登录后可看的非 DRM 内容可下载，配置对应平台的 Cookie 可提升清晰度上限。
+    "ytdlp": {
+        # 总开关。关闭后这些平台的链接会被明确拒绝而不是静默跳过。
+        "enabled": True,
+        # 按平台单独开关；缺省视为开启。键名见 ytdlp.url_parser.SUPPORTED_PLATFORMS：
+        # iqiyi / tencent / youku / mgtv / kuaishou / xigua / toutiao / weibo / xiaohongshu
+        "platforms": {},
+        # 按平台配置登录 Cookie（浏览器地址栏 F12 → Network → 请求头 Cookie 整段
+        # 复制）。写法：
+        #   cookies:
+        #     iqiyi: "P00001=xxx; QC005=yyy"
+        #     tencent: {vqq_vuserid: xxx, vqq_access_token: yyy}
+        "cookies": {},
+        # 或者直接指定浏览器导出的 Netscape 格式 cookies.txt（对所有平台生效，
+        # 优先级高于 cookies）。
+        "cookie_file": "",
+        # 画质偏好：highest / lowest / 4k / 2k / 1080p / 720p / 480p / 360p。
+        # 指定档位不可用时自动降级；实际上限由账号权限与站方策略决定。
+        "quality": "highest",
+        # 只下载音频轨（保存为 .m4a）。
+        "audio_only": False,
+        # 附带产物开关。默认全关，与抖音 / B 站侧保持一致的「只拿主媒体」策略。
+        "download_cover": False,
+        "download_subtitle": False,
+        "download_json": False,
+        # ffmpeg 路径。留空则用打包内置的 ffmpeg，其次搜索 PATH。分离音视频轨
+        # 的站点合并必须依赖 ffmpeg。
+        "ffmpeg_path": "",
+        # 逃生舱：直接透传给 yt-dlp 的额外选项字典（如 {"geo_bypass": true}）。
+        "extra_options": {},
+        # 数量上限，0 = 不限。剧集页 / 列表页展开后按此截断。
+        "number": {
+            "video": 0,
+        },
+        # 磁盘增量（按 <平台>_<视频ID> 判定）。
+        "increase": {
+            "video": True,
+        },
+    },
+    # 微信视频号嗅探下载（python run.py --channels 或网页控制台「视频号」页）。
+    # 视频号没有免登录 Web API，登录态只在本机微信客户端里；嗅探模式下
+    # 工具启动本机 MITM 代理（mitmproxy），被动读取微信内嵌浏览器流量中的
+    # 视频直链与解密密钥，捕获后下载。详见 channels/ 包 docstring。
+    "channels": {
+        # 嗅探开关（URL 直链下载不受此影响；视频号链接本身不支持直链）。
+        "enabled": True,
+        # 捕获到新视频后是否自动下载；False 时只进入列表，手动挑选下载。
+        "auto_download": True,
+        # 画质偏好：highest / lowest / 1080p / 720p / 480p …（匹配不到自动回退）。
+        "quality": "highest",
+        # 本机嗅探代理端口（默认避开 wx_channels_download 的 2022）。
+        "proxy_port": 8899,
+        # 自动模式下是否录制正在直播的 FLV 流（时长无上界，默认关；列表里
+        # 可随时手动开始录制）。
+        "live_record": False,
+        # 附带下载封面图。
+        "download_cover": False,
+        # 增量下载（按 channels_<objectId> 判重）。
+        "increase": True,
+    },
 }

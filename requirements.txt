@@ -9,3 +9,10 @@ gmssl>=3.2.2
 # Bundled ffmpeg static binary for audio extraction before
 # transcription upload. Pinned exact for reproducible sidecar builds.
 imageio-ffmpeg==0.6.0
+# 爱奇艺 / 腾讯视频 / 优酷 / 芒果TV / 快手 / 西瓜 / 头条 / 微博 / 小红书 下载引擎
+# （ytdlp/ 包）。站方改版时先 `pip install -U yt-dlp` 更新解析器。
+yt-dlp>=2025.1.1
+
+# 可选：微信视频号嗅探下载（channels/ 包）。不在主依赖里，按需安装：
+#   pip install ".[channels]"
+# mitmproxy 10+ 要求 Python 3.10+。

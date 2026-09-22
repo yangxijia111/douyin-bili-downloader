@@ -37,9 +37,46 @@ from storage import Database, FileManager
 from utils.logger import set_console_log_level, setup_logger
 from utils.notifier import build_notifier
 from utils.validators import is_short_url, normalize_short_url
+from ytdlp import (
+    YtdlpDownloader,
+    YtdlpDownloadError,
+    YtdlpMissingError,
+    YtdlpURLParser,
+    detect_ytdlp_platform,
+    platform_display_name,
+)
 
 logger = setup_logger("CLI")
 display = ProgressDisplay()
+
+# 历史库配置快照里绝不能出现的顶层键（抖音凭据与转写密钥）。
+_SNAPSHOT_EXCLUDED_KEYS = ("cookies", "cookie", "transcript")
+# 各平台段落里属于账号凭据的键：段落其余部分（画质 / 数量上限等）保留，便于
+# 回看当时的下载参数。
+_PLATFORM_SECRET_KEYS = {
+    "bilibili": ("cookie", "cookies"),
+    "ytdlp": ("cookie", "cookies", "cookie_file"),
+}
+
+
+def _config_snapshot(config: ConfigLoader) -> str:
+    """历史库配置快照：所有平台的账号凭据绝不入库。
+
+    三条下载链路（抖音 / B 站 / yt-dlp）共用：哪怕当前任务只是抖音链接，配置
+    里其他平台的 Cookie 也不能跟着快照进数据库。
+    """
+    safe_config = {
+        k: v
+        for k, v in config.config.items()
+        if k not in _SNAPSHOT_EXCLUDED_KEYS and k not in _PLATFORM_SECRET_KEYS
+    }
+    for section_name, secret_keys in _PLATFORM_SECRET_KEYS.items():
+        section = json.loads(json.dumps(config.get(section_name) or {}))
+        if isinstance(section, dict):
+            for key in secret_keys:
+                section.pop(key, None)
+        safe_config[section_name] = section
+    return json.dumps(safe_config, ensure_ascii=False)
 
 
 def _as_bool(value: Any, default: bool = True) -> bool:
@@ -106,6 +143,29 @@ async def download_url(
     # 让抖音侧的解析器给出「不支持的链接」而不是在这里静默丢弃。
     if detect_platform(url) == "bilibili":
         return await download_bilibili_url(
+            url,
+            config,
+            file_manager,
+            rate_limiter,
+            retry_handler,
+            queue_manager,
+            database=database,
+            progress_reporter=progress_reporter,
+        )
+
+    # 视频号链接不可直链下载（网页版要微信登录态）：给出嗅探模式引导，
+    # 而不是掉进抖音兜底报「不支持的链接」。
+    from channels.url_parser import CHANNELS_URL_HINT, is_channels_url
+
+    if is_channels_url(url):
+        if progress_reporter:
+            progress_reporter.update_step("解析链接", "视频号链接需嗅探模式")
+        display.print_warning(CHANNELS_URL_HINT)
+        return None
+
+    # 爱奇艺 / 腾讯视频 / 优酷等其他平台走 yt-dlp 引擎；域名与前两者互不重叠。
+    if detect_ytdlp_platform(url) is not None:
+        return await download_ytdlp_url(
             url,
             config,
             file_manager,
@@ -196,18 +256,13 @@ async def download_url(
                 "写入数据库历史" if (result and database) else "数据库未启用，跳过",
             )
         if result and database:
-            safe_config = {
-                k: v
-                for k, v in config.config.items()
-                if k not in ("cookies", "cookie", "transcript")
-            }
             await database.add_history(
                 {
                     "url": original_url,
                     "url_type": parsed["type"],
                     "total_count": result.total,
                     "success_count": result.success,
-                    "config": json.dumps(safe_config, ensure_ascii=False),
+                    "config": _config_snapshot(config),
                 }
             )
 
@@ -353,24 +408,13 @@ async def download_bilibili_url(
                 "写入数据库历史" if (result and database) else "数据库未启用，跳过",
             )
         if result and database:
-            safe_config = {
-                k: v
-                for k, v in config.config.items()
-                if k not in ("cookies", "cookie", "transcript", "bilibili")
-            }
-            # bilibili 段里的 cookie/cookies 是账号凭据，快照入库前必须剥掉。
-            bili_section = json.loads(json.dumps(config.get("bilibili") or {}))
-            if isinstance(bili_section, dict):
-                bili_section.pop("cookie", None)
-                bili_section.pop("cookies", None)
-            safe_config["bilibili"] = bili_section
             await database.add_history(
                 {
                     "url": original_url,
                     "url_type": f"bilibili:{parsed['type']}",
                     "total_count": result.total,
                     "success_count": result.success,
-                    "config": json.dumps(safe_config, ensure_ascii=False),
+                    "config": _config_snapshot(config),
                 }
             )
 
@@ -386,6 +430,151 @@ async def download_bilibili_url(
         return result
 
 
+def ytdlp_error_hint(error: YtdlpDownloadError, platform_name: str) -> str:
+    """按错误类别给出可操作的提示；yt-dlp 的原始文案附在后面供排查。"""
+    hints = {
+        "drm": (
+            f"该内容受 {platform_name} 的 DRM 保护（通常是 VIP 专享影视），"
+            "任何下载工具都无法直接获取，配置会员 Cookie 也不行。"
+        ),
+        "login": (
+            f"该内容需要登录态或会员权限。请在 config.yml 的 ytdlp.cookies 中"
+            f"填入 {platform_name} 的 Cookie 后重试；若已是会员仍失败，说明内容受 DRM 保护。"
+        ),
+        "geo": "该内容有地区限制。可尝试配置 proxy，或在 ytdlp.extra_options 里开启 geo_bypass。",
+        "unsupported": (
+            f"yt-dlp 暂不支持该 {platform_name} 链接形态，或站方近期改版导致解析器失效。"
+            "请先 `pip install -U yt-dlp` 更新到最新版再试；若仍失败说明上游尚未修复。"
+        ),
+        "phantomjs": (
+            f"{platform_name} 的这个站点需要 PhantomJS 执行页面脚本。"
+            "从 https://phantomjs.org/download.html 下载后把可执行文件放到 PATH 再重试。"
+        ),
+    }
+    hint = hints.get(error.kind, "下载失败，可先 `pip install -U yt-dlp` 更新解析器后重试。")
+    return f"{hint}（yt-dlp: {error.message}）"
+
+
+async def download_ytdlp_url(
+    url: str,
+    config: ConfigLoader,
+    file_manager: FileManager,
+    rate_limiter: RateLimiter,
+    retry_handler: RetryHandler,
+    queue_manager: QueueManager,
+    database: Database = None,
+    progress_reporter: ProgressDisplay = None,
+):
+    """yt-dlp 平台链路：平台门禁 → 解析 → 下载器 → 历史落库。
+
+    与 B 站链路同构；差别是没有站方 API 客户端（HTTP 由 yt-dlp 自管），也没有
+    短链展开步骤（快手 / 小红书的短链由 yt-dlp 自行跟随跳转）。
+    """
+    parsed = YtdlpURLParser.parse(url)
+    if not parsed:
+        if progress_reporter:
+            progress_reporter.update_step("解析链接", "URL 解析失败")
+        display.print_error(f"无法识别为受支持的平台链接：{url}")
+        return None
+
+    platform = parsed["platform"]
+    name = parsed.get("platform_name") or platform_display_name(platform)
+
+    if not config.get_ytdlp_enabled():
+        if progress_reporter:
+            progress_reporter.update_step("解析链接", "第三方平台下载已在配置中关闭")
+        display.print_error(
+            "其他平台下载已在配置中关闭（ytdlp.enabled: false）。改为 true 或删除该配置项后重试。"
+        )
+        return None
+    if not config.get_ytdlp_platform_enabled(platform):
+        if progress_reporter:
+            progress_reporter.update_step("解析链接", f"{name} 已在配置中关闭")
+        display.print_error(
+            f"{name} 下载已在配置中关闭（ytdlp.platforms.{platform}: false）。改为 true 后重试。"
+        )
+        return None
+
+    original_url = url
+    if not progress_reporter:
+        display.print_info(f"Platform: {name} ({platform}) | engine: yt-dlp")
+    if progress_reporter:
+        progress_reporter.advance_step("解析链接", f"{name} · yt-dlp 引擎")
+
+    if not config.get_ytdlp_cookies(platform) and not str(
+        (config.get("ytdlp") or {}).get("cookie_file") or ""
+    ).strip():
+        display.print_warning(
+            f"未配置 {name} 的 Cookie（ytdlp.cookies.{platform}）：只能下载免费 / 未登录可看的内容，"
+            "清晰度可能受限。"
+        )
+
+    if progress_reporter:
+        progress_reporter.advance_step("创建下载器", f"{name} · video")
+    downloader = YtdlpDownloader(
+        config=config,
+        file_manager=file_manager,
+        database=database,
+        rate_limiter=rate_limiter,
+        retry_handler=retry_handler,
+        queue_manager=queue_manager,
+        progress_reporter=progress_reporter,
+    )
+
+    if progress_reporter:
+        progress_reporter.advance_step("执行下载", "开始解析与下载资源")
+    try:
+        result = await downloader.download(parsed)
+    except YtdlpMissingError as exc:
+        if progress_reporter:
+            progress_reporter.update_step("执行下载", "未安装 yt-dlp")
+        display.print_error(str(exc))
+        return None
+    except YtdlpDownloadError as exc:
+        hint = ytdlp_error_hint(exc, name)
+        if progress_reporter:
+            progress_reporter.update_step("执行下载", f"失败：{exc.kind}")
+        display.print_error(hint)
+        return None
+    except Exception as exc:
+        if progress_reporter:
+            progress_reporter.update_step("执行下载", f"失败：{exc}")
+        display.print_error(f"{name} 下载失败 for {url}: {exc}")
+        return None
+
+    # 整条链接全部失败时把最后一次错误的分类提示打出来：yt-dlp 的逐条报错
+    # 已经进了日志，但用户在进度条上只看到「失败 N」，需要一句能行动的解释。
+    if result and result.total and result.success == 0 and downloader.last_error:
+        display.print_error(ytdlp_error_hint(downloader.last_error, name))
+
+    if progress_reporter:
+        progress_reporter.advance_step(
+            "记录历史",
+            "写入数据库历史" if (result and database) else "数据库未启用，跳过",
+        )
+    if result and database:
+        await database.add_history(
+            {
+                "url": original_url,
+                "url_type": f"ytdlp:{platform}:{parsed['type']}",
+                "total_count": result.total,
+                "success_count": result.success,
+                "config": _config_snapshot(config),
+            }
+        )
+
+    if progress_reporter:
+        if result:
+            progress_reporter.advance_step(
+                "收尾",
+                f"成功 {result.success} / 失败 {result.failed} / 跳过 {result.skipped}",
+            )
+        else:
+            progress_reporter.advance_step("收尾", "无可统计结果")
+
+    return result
+
+
 async def main_async(args):
     if not args.serve:
         display.show_banner()
@@ -395,10 +584,10 @@ async def main_async(args):
     else:
         config_path = "config.yml"
 
-    # 若 config 不存在且使用了 --hot-board / --search / --serve 等独立子命令，
-    # 允许以默认配置运行（只要命令行提供了 --path）。
+    # 若 config 不存在且使用了 --hot-board / --search / --serve / --channels 等
+    # 独立子命令，允许以默认配置运行（只要命令行提供了 --path）。
     if not Path(config_path).exists():
-        if not (args.hot_board is not None or args.search or args.serve):
+        if not (args.hot_board is not None or args.search or args.serve or args.channels):
             display.print_error(f"Config file not found: {config_path}")
             return
         # For ``--serve`` we still pass the (yet-missing) path so later
@@ -429,6 +618,11 @@ async def main_async(args):
     if args.serve:
         await _run_serve_subcommand(args, config)
         return
+    if args.channels:
+        from cli.channels_session import run_channels_session
+
+        await run_channels_session(config, port=args.channels_port)
+        return
 
     if args.url:
         urls = args.url if isinstance(args.url, list) else [args.url]
@@ -444,10 +638,31 @@ async def main_async(args):
         return
 
     urls = config.get_links()
-    # 平台分流在准备阶段就要落地：只有确实存在非 B 站链接时才去读写抖音的
-    # Cookie 文件。否则纯 B 站任务会用一个空字典覆盖掉用户的抖音登录态。
-    douyin_urls = [item for item in urls if detect_platform(item) != "bilibili"]
+    # 平台分流在准备阶段就要落地：只有确实存在抖音链接时才去读写抖音的
+    # Cookie 文件。否则纯 B 站 / 纯第三方平台任务会用一个空字典覆盖掉用户的
+    # 抖音登录态。
+    from channels.url_parser import CHANNELS_URL_HINT, is_channels_url
+
+    channels_urls = [item for item in urls if is_channels_url(item)]
+    if channels_urls:
+        display.print_warning(
+            f"检测到 {len(channels_urls)} 个视频号链接，无法直链下载。{CHANNELS_URL_HINT}"
+        )
     bilibili_urls = [item for item in urls if detect_platform(item) == "bilibili"]
+    ytdlp_urls = [
+        item
+        for item in urls
+        if detect_platform(item) != "bilibili"
+        and detect_ytdlp_platform(item) is not None
+        and not is_channels_url(item)
+    ]
+    douyin_urls = [
+        item
+        for item in urls
+        if detect_platform(item) != "bilibili"
+        and detect_ytdlp_platform(item) is None
+        and not is_channels_url(item)
+    ]
 
     cookie_manager = CookieManager()
     if douyin_urls:
@@ -467,6 +682,13 @@ async def main_async(args):
         display.print_info(
             f"其中哔哩哔哩链接 {len(bilibili_urls)} 个"
             + ("（已配置登录 Cookie）" if config.get_bilibili_cookies() else "（未配置登录 Cookie，清晰度上限 480P）")
+        )
+    if ytdlp_urls:
+        platform_names = sorted(
+            {platform_display_name(detect_ytdlp_platform(item)) for item in ytdlp_urls}
+        )
+        display.print_info(
+            f"其中其他平台链接 {len(ytdlp_urls)} 个（{' / '.join(platform_names)}，yt-dlp 引擎）"
         )
 
     all_results = []
@@ -636,6 +858,18 @@ def main():
     )
     parser.add_argument("--serve-host", type=str, default="127.0.0.1", help="REST 服务监听地址")
     parser.add_argument("--serve-port", type=int, default=8000, help="REST 服务监听端口")
+    parser.add_argument(
+        "--channels",
+        action="store_true",
+        help="进入微信视频号嗅探会话：拦截本机微信流量自动捕获并下载"
+        "（需要安装 mitmproxy：pip install \".[channels]\"）",
+    )
+    parser.add_argument(
+        "--channels-port",
+        type=int,
+        default=None,
+        help="视频号嗅探代理端口（默认取 channels.proxy_port 配置，8899）",
+    )
     try:
         from __init__ import __version__
     except ImportError:

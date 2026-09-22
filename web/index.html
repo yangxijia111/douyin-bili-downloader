@@ -163,6 +163,7 @@ tbody tr:hover{background:var(--bg3)}
       <button data-tab="download"><svg class="glyph" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1v8.6L4.7 6.3 3.3 7.7 8 12.4l4.7-4.7-1.4-1.4L8 9.6V1H8z"/><rect x="2" y="13" width="12" height="2" rx="1"/></svg>链接下载</button>
       <button data-tab="jobs"><svg class="glyph" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="3" width="14" height="2.6" rx="1.3"/><rect x="1" y="7.5" width="14" height="2.6" rx="1.3"/><rect x="1" y="12" width="9" height="2.6" rx="1.3"/></svg>任务中心</button>
       <button data-tab="discovery"><svg class="glyph" viewBox="0 0 16 16" fill="currentColor"><path d="M7 1a6 6 0 1 0 3.7 10.7l3.3 3.3 1.4-1.4-3.3-3.3A6 6 0 0 0 7 1zm0 2a4 4 0 1 1 0 8 4 4 0 0 1 0-8z"/></svg>数据发现</button>
+      <button data-tab="channels"><svg class="glyph" viewBox="0 0 16 16" fill="currentColor"><path d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v6A1.5 1.5 0 0 1 12.5 11H8.4L5 13.8V11H3.5A1.5 1.5 0 0 1 2 9.5v-6z"/></svg>视频号</button>
       <button data-tab="archive"><svg class="glyph" viewBox="0 0 16 16" fill="currentColor"><path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h11A1.5 1.5 0 0 1 15 3.5V5H1V3.5zM1 6.5h14v6A1.5 1.5 0 0 1 13.5 14h-11A1.5 1.5 0 0 1 1 12.5v-6zm4 2v1.5h6V8.5H5z"/></svg>下载档案</button>
       <button data-tab="settings"><svg class="glyph" viewBox="0 0 16 16" fill="currentColor"><path d="M8 5.2A2.8 2.8 0 1 0 8 10.8 2.8 2.8 0 0 0 8 5.2zm0 1.6a1.2 1.2 0 1 1 0 2.4 1.2 1.2 0 0 1 0-2.4z"/><path d="M7.1 1h1.8l.3 1.7 1.3.5 1.4-1 1.3 1.3-1 1.4.5 1.3 1.7.3v1.8l-1.7.3-.5 1.3 1 1.4-1.3 1.3-1.4-1-1.3.5-.3 1.7H7.1l-.3-1.7-1.3-.5-1.4 1L2.8 12l1-1.4-.5-1.3L1.6 9V7.2l1.7-.3.5-1.3-1-1.4L4.1 2.9l1.4 1 1.3-.5L7.1 1z"/></svg>配置中心</button>
       <button data-tab="about"><svg class="glyph" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 2.6a1.1 1.1 0 1 1 0 2.2 1.1 1.1 0 0 1 0-2.2zM6.6 7h2.2v5.4H6.6V7z"/></svg>关于</button>
@@ -313,6 +314,35 @@ tbody tr:hover{background:var(--bg3)}
             <button class="btn" id="searchRun" style="align-self:flex-end">开始搜索</button>
           </div>
           <div id="searchResult" style="margin-top:14px"></div>
+        </div>
+      </section>
+
+      <!-- 视频号（嗅探） -->
+      <section class="panel" id="panel-channels">
+        <div class="card">
+          <h3>视频号嗅探会话</h3>
+          <p class="hint">视频号没有免登录网页版：启动嗅探后，工具接管系统代理，被动读取本机微信「视频号」流量中的视频直链与解密密钥——在本机微信里打开视频号刷视频即可自动捕获下载（结束会话自动还原系统代理）。依赖 mitmproxy（pip install ".[channels]"）。</p>
+          <div class="row" style="align-items:center;gap:10px;flex-wrap:wrap">
+            <span class="dot" id="chDot"></span>
+            <span id="chStateText" style="font-size:12.5px">未启动</span>
+            <span style="flex:1"></span>
+            <label style="font-size:12.5px;display:flex;align-items:center;gap:6px;margin:0">
+              <input type="checkbox" id="chAutoDownload"> 自动下载
+            </label>
+            <button class="btn" id="chStartBtn">启动嗅探</button>
+            <button class="btn ghost" id="chStopBtn" disabled>停止</button>
+          </div>
+          <div class="row" style="margin-top:12px;align-items:center;gap:10px;flex-wrap:wrap">
+            <span style="font-size:12.5px;color:var(--muted)">根证书：</span>
+            <span id="chCertText" style="font-size:12.5px;font-family:var(--mono)">—</span>
+            <button class="btn ghost mini" id="chInstallBtn">安装证书</button>
+            <span id="chStatsText" style="font-size:12.5px;color:var(--muted);margin-left:auto"></span>
+          </div>
+          <p class="hint" id="chHint" style="margin-top:8px"></p>
+        </div>
+        <div class="card">
+          <h3>捕获列表 <span id="chFeedCount" style="color:var(--muted);font-weight:400;font-size:12px"></span></h3>
+          <div id="chFeeds"><div class="empty">未启动嗅探。</div></div>
         </div>
       </section>
 
@@ -548,6 +578,7 @@ const PAGE_META = {
   download: ["链接下载", "粘贴链接，配置范围，提交任务"],
   jobs: ["任务中心", "任务队列与结果追踪"],
   discovery: ["数据发现", "热搜榜与关键词搜索"],
+  channels: ["视频号", "嗅探本机微信视频号流量，捕获后自动/手动下载"],
   archive: ["下载档案", "下载清单与历史数据库"],
   settings: ["配置中心", "编辑 config.yml"],
   about: ["关于", "功能范围与免责声明"]
@@ -571,7 +602,9 @@ function activateTab(tab) {
   document.getElementById("pageSub").textContent = meta[1];
 
   if (state.jobsTimer) { clearInterval(state.jobsTimer); state.jobsTimer = null; }
+  if (state.chTimer) { clearInterval(state.chTimer); state.chTimer = null; }
   if (tab === "jobs") { loadJobs(); startJobPolling(); }
+  if (tab === "channels") { loadChannelsAll(); state.chTimer = setInterval(loadChannelsAll, 2000); }
   if (tab === "overview") loadStats();
   if (tab === "settings" && !state.config) loadConfig();
 }
@@ -1254,6 +1287,172 @@ async function openFolder(path) {
 document.getElementById("ovOpenDir").addEventListener("click", function () { openFolder(""); });
 document.getElementById("ovCopyDir").addEventListener("click", function () {
   copyText(state.downloadDirAbs, "已复制路径");
+});
+
+/* ============================ 视频号嗅探 ============================ */
+const CH_KIND = { video: "视频", image: "图文", live: "直播" };
+const CH_STATUS = { pending: "待下载", downloading: "下载中", done: "已完成", skipped: "已跳过", failed: "失败" };
+
+function chFmtSize(n) {
+  if (!n) return "";
+  let v = n;
+  for (const u of ["B", "KB", "MB", "GB"]) { if (v < 1024 || u === "GB") return (u === "B" ? v.toFixed(0) : v.toFixed(1)) + u; v /= 1024; }
+  return v.toFixed(1) + "GB";
+}
+function chFmtDur(sec) {
+  if (!sec) return "";
+  const m = Math.floor(sec / 60), s = sec % 60;
+  return m + ":" + String(s).padStart(2, "0");
+}
+function chFmtTime(ts) {
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  return (d.getMonth() + 1) + "-" + String(d.getDate()).padStart(2, "0") + " " +
+    String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+}
+
+function loadChannelsAll() {
+  loadChannelsStatus();
+  loadChannelsFeeds();
+}
+
+async function loadChannelsStatus() {
+  let s;
+  try { s = await api("/api/v1/channels/status"); } catch (err) { return; }
+  const dot = document.getElementById("chDot");
+  dot.className = "dot " + (s.running ? "on" : "off");
+  const cert = s.certificate || {};
+  const certOk = !!cert.installed;
+  const mitmOk = !!s.mitmproxy_available;
+  document.getElementById("chStateText").textContent = s.running
+    ? "嗅探运行中 · 端口 " + s.port + " · 已捕获 " + (s.feeds_total || 0) + " 条"
+    : "未启动";
+  document.getElementById("chStartBtn").disabled = s.running || !mitmOk || !s.enabled;
+  document.getElementById("chStartBtn").textContent = s.running ? "嗅探中…" : "启动嗅探";
+  document.getElementById("chStopBtn").disabled = !s.running;
+  const autoBox = document.getElementById("chAutoDownload");
+  autoBox.disabled = !s.running;
+  autoBox.checked = !!s.auto_download;
+  document.getElementById("chInstallBtn").disabled = certOk || !mitmOk;
+  document.getElementById("chCertText").textContent = !mitmOk
+    ? "不可用（缺 mitmproxy）"
+    : certOk ? "已信任" : cert.exists ? "已生成，未信任" : "未生成";
+  const hint = document.getElementById("chHint");
+  if (!mitmOk) {
+    hint.textContent = '未安装 mitmproxy：在服务端执行 pip install ".[channels]" 后重启服务。';
+  } else if (!certOk) {
+    hint.textContent = "首次使用需先「安装证书」——点击后服务器会弹出 Windows 确认框，请点「是」。证书仅在本机生成（~/.mitmproxy），用于解密本机微信视频流量。";
+  } else if (!s.running) {
+    hint.textContent = "证书就绪。点击「启动嗅探」后，在本机微信里打开视频号刷视频即可捕获。";
+  } else {
+    hint.textContent = "正在嗅探。在本机微信里打开视频号播放视频即可；停止会话时系统代理自动还原。";
+  }
+  if (s.stats) {
+    document.getElementById("chStatsText").textContent =
+      "成功 " + s.stats.success + " · 跳过 " + s.stats.skipped + " · 失败 " + s.stats.failed;
+  } else {
+    document.getElementById("chStatsText").textContent = "";
+  }
+}
+
+async function loadChannelsFeeds() {
+  let d;
+  try { d = await api("/api/v1/channels/feeds?limit=100"); } catch (err) { return; }
+  const box = document.getElementById("chFeeds");
+  if (!d || !d.running) {
+    box.innerHTML = '<div class="empty">未启动嗅探。</div>';
+    document.getElementById("chFeedCount").textContent = "";
+    return;
+  }
+  document.getElementById("chFeedCount").textContent = "共 " + (d.total || 0) + " 条";
+  const feeds = d.feeds || [];
+  if (!feeds.length) {
+    box.innerHTML = '<div class="empty">嗅探运行中，尚未捕获内容。打开本机微信 → 视频号，播放任意视频试试。</div>';
+    return;
+  }
+  box.innerHTML = feeds.map(function (f) {
+    const kind = CH_KIND[f.kind] || f.kind;
+    const meta = [
+      f.author_name || "未知作者",
+      chFmtTime(f.create_time),
+      kind,
+      f.duration ? chFmtDur(f.duration) : "",
+      f.file_size ? chFmtSize(f.file_size) : ""
+    ].filter(Boolean).join(" · ");
+    const statusColor = { done: "var(--ok, #3aa675)", failed: "var(--err, #d26)", downloading: "#d59f18" }[f.status] || "var(--muted)";
+    const badge = '<span style="font-size:11px;color:' + statusColor + '">' +
+      (CH_STATUS[f.status] || f.status) + (f.status === "skipped" && f.kind === "live" ? "（直播）" : "") + "</span>";
+    let action = "";
+    if (f.status !== "downloading" && f.status !== "done") {
+      action = '<button class="btn mini" onclick="chDownload(\'' + esc(f.feed_id) + '\')">' +
+        (f.kind === "live" ? "录制" : "下载") + "</button>";
+    } else if (f.status === "done" && f.downloaded_paths && f.downloaded_paths.length) {
+      action = '<span style="font-size:11px;color:var(--muted);font-family:var(--mono)">' +
+        esc(f.downloaded_paths[f.downloaded_paths.length - 1].split(/[\\/]/).pop()) + "</span>";
+    }
+    const cover = f.cover_url
+      ? '<img src="' + esc(f.cover_url) + '" alt="" style="width:46px;height:46px;object-fit:cover;border-radius:6px;flex:none;background:#222">'
+      : '<div style="width:46px;height:46px;border-radius:6px;flex:none;background:#2a2a33;display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--muted)">' + kind + "</div>";
+    return '<div style="display:flex;gap:10px;align-items:center;padding:8px 2px;border-bottom:1px solid rgba(255,255,255,.06)">' +
+      cover +
+      '<div style="flex:1;min-width:0">' +
+        '<div style="font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(f.title || "(无标题)") + "</div>" +
+        '<div style="font-size:11px;color:var(--muted);margin-top:3px">' + esc(meta) +
+          (f.error ? ' <span style="color:var(--err)">· ' + esc(f.error.slice(0, 60)) + "</span>" : "") + "</div>" +
+      "</div>" +
+      badge +
+      '<div style="flex:none;min-width:60px;text-align:right">' + action + "</div>" +
+    "</div>";
+  }).join("");
+}
+
+async function chDownload(feedId) {
+  try {
+    await api("/api/v1/channels/feeds/" + encodeURIComponent(feedId) + "/download", { method: "POST" });
+    toast("已加入下载", "ok");
+  } catch (err) { toast(err.message, "err"); }
+  loadChannelsAll();
+}
+
+document.getElementById("chStartBtn").addEventListener("click", async function () {
+  const btn = this;
+  btn.disabled = true; btn.textContent = "启动中…";
+  try {
+    await api("/api/v1/channels/start", { method: "POST", body: {} });
+    toast("嗅探已启动，请在本机微信里打开视频号", "ok");
+  } catch (err) { toast(err.message, "err"); }
+  loadChannelsAll();
+});
+
+document.getElementById("chStopBtn").addEventListener("click", async function () {
+  const btn = this;
+  btn.disabled = true;
+  try {
+    await api("/api/v1/channels/stop", { method: "POST" });
+    toast("嗅探已停止，系统代理已还原", "ok");
+  } catch (err) { toast(err.message, "err"); }
+  loadChannelsAll();
+});
+
+document.getElementById("chInstallBtn").addEventListener("click", async function () {
+  const btn = this;
+  btn.disabled = true; btn.textContent = "等待确认…";
+  try {
+    await api("/api/v1/channels/certificate/install", { method: "POST" });
+    toast("证书已安装", "ok");
+  } catch (err) { toast(err.message, "err"); }
+  btn.textContent = "安装证书";
+  loadChannelsAll();
+});
+
+document.getElementById("chAutoDownload").addEventListener("change", async function () {
+  try {
+    await api("/api/v1/channels/auto-download", { method: "POST", body: { enabled: this.checked } });
+    toast(this.checked ? "自动下载已开启" : "自动下载已暂停（仅捕获）", "ok");
+  } catch (err) {
+    toast(err.message, "err");
+  }
+  loadChannelsAll();
 });
 
 /* ============================ 下载档案 ============================ */

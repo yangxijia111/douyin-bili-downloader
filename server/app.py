@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
@@ -49,6 +49,14 @@ from storage import Database, FileManager
 from utils.logger import setup_logger
 from utils.validators import is_short_url
 from utils.validators import normalize_short_url as normalize_douyin_short_url
+from ytdlp import (
+    YtdlpDownloader,
+    YtdlpDownloadError,
+    YtdlpMissingError,
+    YtdlpURLParser,
+    detect_ytdlp_platform,
+    platform_display_name,
+)
 
 logger = setup_logger("REST")
 
@@ -98,8 +106,8 @@ _EDITABLE_CONFIG_KEYS = (
 )
 
 # 单次提交允许覆盖的配置键（不落盘，只作用于该 job）。
-# ``bilibili`` 允许整段传入：ConfigLoader.update 对 dict 深合并，网页端可以只
-# 覆盖 bilibili.number / increase / quality 等子键而无需重发整段配置。
+# ``bilibili`` / ``ytdlp`` 允许整段传入：ConfigLoader.update 对 dict 深合并，网页端
+# 可以只覆盖 bilibili.number / ytdlp.quality 等子键而无需重发整段配置。
 _OVERRIDE_KEYS = frozenset(
     {
         "mode",
@@ -122,6 +130,7 @@ _OVERRIDE_KEYS = frozenset(
         "live",
         "transcript",
         "bilibili",
+        "ytdlp",
     }
 )
 
@@ -144,6 +153,14 @@ _BARE_BILI_RE = re.compile(
     re.IGNORECASE,
 )
 _BARE_BVID_RE = re.compile(r"(?<![0-9A-Za-z])(BV[0-9A-Za-z]{10})(?![0-9A-Za-z])")
+# 快手 / 小红书等平台的分享文案同样常带不含 scheme 的裸短链。
+_BARE_YTDLP_RE = re.compile(
+    r"(?<![0-9A-Za-z._-])"
+    r"((?:[a-z0-9-]+\.)*(?:iqiyi\.com|iq\.com|v\.qq\.com|video\.qq\.com|youku\.com|mgtv\.com"
+    r"|kuaishou\.com|gifshow\.com|chenzhongtech\.com|ixigua\.com|toutiao\.com"
+    r"|weibo\.com|weibo\.cn|xiaohongshu\.com|xhslink\.com)/[^\s<>\"'）)】\]】，。、；！？]*)",
+    re.IGNORECASE,
+)
 _URL_TRAILING_JUNK = ".,;:!?)]}>）】、，。；：！？"
 
 
@@ -159,6 +176,9 @@ def extract_url_from_text(raw: str) -> str:
     if match:
         return "https://" + match.group(1).rstrip(_URL_TRAILING_JUNK)
     match = _BARE_BILI_RE.search(text)
+    if match:
+        return "https://" + match.group(1).rstrip(_URL_TRAILING_JUNK)
+    match = _BARE_YTDLP_RE.search(text)
     if match:
         return "https://" + match.group(1).rstrip(_URL_TRAILING_JUNK)
     match = _BARE_BVID_RE.search(text)
@@ -247,6 +267,23 @@ def _redacted_config(config: Dict[str, Any]) -> Dict[str, Any]:
                 bilibili[key] = {k: ("***" if v else "") for k, v in value.items()}
             elif value:
                 bilibili[key] = "***"
+    # ytdlp.cookies 是「平台 → Cookie」两层字典，逐平台脱敏；cookie_file 是本机
+    # 路径，也不该暴露给浏览器。
+    ytdlp = out.get("ytdlp")
+    if isinstance(ytdlp, dict):
+        cookies = ytdlp.get("cookies")
+        if isinstance(cookies, dict):
+            redacted: Dict[str, Any] = {}
+            for platform, value in cookies.items():
+                if isinstance(value, dict):
+                    redacted[platform] = {k: ("***" if v else "") for k, v in value.items()}
+                else:
+                    redacted[platform] = "***" if value else ""
+            ytdlp["cookies"] = redacted
+        elif cookies:
+            ytdlp["cookies"] = "***"
+        if ytdlp.get("cookie_file"):
+            ytdlp["cookie_file"] = "***"
     transcript = out.get("transcript")
     if isinstance(transcript, dict) and transcript.get("api_key"):
         transcript["api_key"] = "***"
@@ -448,6 +485,15 @@ async def _execute_download(
         return await _execute_bilibili_download(
             url, deps, config, database, limiter, reporter, job
         )
+    # 爱奇艺 / 腾讯视频 / 优酷等其他平台走 yt-dlp 引擎。
+    if detect_ytdlp_platform(url) is not None:
+        return await _execute_ytdlp_download(url, deps, config, database, limiter, reporter, job)
+
+    # 视频号链接不可直链下载（网页版要微信登录态）：给出嗅探模式引导。
+    from channels.url_parser import CHANNELS_URL_HINT, is_channels_url
+
+    if is_channels_url(url):
+        raise RuntimeError(CHANNELS_URL_HINT)
 
     # proxy 与 cli.main.download_url 对齐:API 请求、短链解析和 CDN 媒体
     # 下载(downloader_base 读 api_client.proxy)统一走配置代理。
@@ -494,20 +540,32 @@ async def _execute_download(
         }
 
 
-def _bili_config_snapshot(config: ConfigLoader) -> str:
-    """B 站任务的历史库配置快照：凭据（cookie/cookies）绝不入库。"""
-    section = config.get("bilibili")
-    snapshot = deepcopy(section) if isinstance(section, dict) else {}
-    if isinstance(snapshot, dict):
-        snapshot.pop("cookie", None)
-        snapshot.pop("cookies", None)
+_SNAPSHOT_EXCLUDED_KEYS = ("cookies", "cookie", "transcript")
+_PLATFORM_SECRET_KEYS = {
+    "bilibili": ("cookie", "cookies"),
+    "ytdlp": ("cookie", "cookies", "cookie_file"),
+}
+
+
+def _config_snapshot(config: ConfigLoader) -> str:
+    """历史库配置快照：所有平台的账号凭据绝不入库（与 cli.main._config_snapshot 对齐）。"""
     safe_config = {
         k: v
         for k, v in config.config.items()
-        if k not in ("cookies", "cookie", "transcript", "bilibili")
+        if k not in _SNAPSHOT_EXCLUDED_KEYS and k not in _PLATFORM_SECRET_KEYS
     }
-    safe_config["bilibili"] = snapshot
+    for section_name, secret_keys in _PLATFORM_SECRET_KEYS.items():
+        section = deepcopy(config.get(section_name))
+        snapshot = section if isinstance(section, dict) else {}
+        for key in secret_keys:
+            snapshot.pop(key, None)
+        safe_config[section_name] = snapshot
     return json.dumps(safe_config, ensure_ascii=False)
+
+
+def _bili_config_snapshot(config: ConfigLoader) -> str:
+    """B 站任务的历史库配置快照：凭据（cookie/cookies）绝不入库。"""
+    return _config_snapshot(config)
 
 
 async def _execute_bilibili_download(
@@ -619,6 +677,111 @@ async def _execute_bilibili_download(
     }
 
 
+def _ytdlp_error_message(error: YtdlpDownloadError, platform_name: str) -> str:
+    """按错误类别组织网页任务卡片上的可操作文案（与 cli.main.ytdlp_error_hint 对齐）。"""
+    hints = {
+        "drm": (
+            f"该内容受 {platform_name} 的 DRM 保护（通常是 VIP 专享影视），"
+            "任何下载工具都无法直接获取，配置会员 Cookie 也不行。"
+        ),
+        "login": (
+            f"该内容需要登录态或会员权限。请在 config.yml 的 ytdlp.cookies 中"
+            f"填入 {platform_name} 的 Cookie 后重试；若已是会员仍失败，说明内容受 DRM 保护。"
+        ),
+        "geo": "该内容有地区限制。可尝试配置 proxy，或在 ytdlp.extra_options 里开启 geo_bypass。",
+        "unsupported": (
+            f"yt-dlp 暂不支持该 {platform_name} 链接形态，或站方近期改版导致解析器失效。"
+            "请先 `pip install -U yt-dlp` 更新到最新版再试；若仍失败说明上游尚未修复。"
+        ),
+        "phantomjs": (
+            f"{platform_name} 的这个站点需要 PhantomJS 执行页面脚本。"
+            "从 https://phantomjs.org/download.html 下载后把可执行文件放到 PATH 再重试。"
+        ),
+    }
+    hint = hints.get(error.kind, "下载失败，可先 `pip install -U yt-dlp` 更新解析器后重试。")
+    return f"{hint}（yt-dlp: {error.message}）"
+
+
+async def _execute_ytdlp_download(
+    url: str,
+    deps: "_ServerDeps",
+    config: ConfigLoader,
+    database: Optional[Database],
+    limiter: Any,
+    reporter: Optional[JobProgressReporter],
+    job: Optional["DownloadJob"],
+) -> Dict[str, int]:
+    """yt-dlp 平台链路：平台门禁 → 解析 → 下载器 → 历史落库。
+
+    与 cli.main.download_ytdlp_url 对齐；报错抛 RuntimeError 落到 job.error，
+    网页任务卡片才能显示可操作的原因。
+    """
+    parsed = YtdlpURLParser.parse(url)
+    if not parsed:
+        raise RuntimeError(f"无法识别为受支持的平台链接：{url}")
+    platform = parsed["platform"]
+    name = parsed.get("platform_name") or platform_display_name(platform)
+
+    if not config.get_ytdlp_enabled():
+        raise RuntimeError(
+            "其他平台下载已在配置中关闭（ytdlp.enabled: false）。改为 true 或删除该配置项后重试。"
+        )
+    if not config.get_ytdlp_platform_enabled(platform):
+        raise RuntimeError(
+            f"{name} 下载已在配置中关闭（ytdlp.platforms.{platform}: false）。改为 true 后重试。"
+        )
+
+    original_url = url
+    if reporter:
+        reporter.update_step("解析链接", f"{name} · yt-dlp 引擎")
+    if not config.get_ytdlp_cookies(platform):
+        logger.info("%s cookies not configured; only free content is downloadable", platform)
+
+    downloader = YtdlpDownloader(
+        config=config,
+        file_manager=deps.file_manager,
+        database=database,
+        rate_limiter=limiter,
+        retry_handler=deps.retry_handler,
+        queue_manager=deps.queue_manager,
+        progress_reporter=reporter,
+        job_id=job.job_id if job is not None else None,
+    )
+
+    try:
+        result = await downloader.download(parsed)
+    except YtdlpMissingError as exc:
+        raise RuntimeError(str(exc)) from exc
+    except YtdlpDownloadError as exc:
+        raise RuntimeError(_ytdlp_error_message(exc, name)) from exc
+
+    # 整条链接全部失败时把分类提示抛成 job.error：逐条报错只在日志里，网页
+    # 任务卡片上需要一句能行动的解释。
+    if result.total and result.success == 0 and downloader.last_error is not None:
+        raise RuntimeError(_ytdlp_error_message(downloader.last_error, name))
+
+    if database:
+        try:
+            await database.add_history(
+                {
+                    "url": original_url,
+                    "url_type": f"ytdlp:{platform}:{parsed['type']}",
+                    "total_count": result.total,
+                    "success_count": result.success,
+                    "config": _config_snapshot(config),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - 落库失败不吞下载结果
+            logger.warning("Failed to record ytdlp history for %s: %s", original_url, exc)
+
+    return {
+        "total": result.total,
+        "success": result.success,
+        "failed": result.failed,
+        "skipped": result.skipped,
+    }
+
+
 def _read_manifest_tail(path: Path, limit: int) -> List[Dict[str, Any]]:
     """Read the last ``limit`` JSON lines of a manifest file (sync helper)."""
     tail: deque = deque(maxlen=limit)
@@ -657,10 +820,19 @@ def build_app(config: ConfigLoader) -> FastAPI:
         ),
     )
 
+    from server.channels import ChannelsSessionError, ChannelsSessionManager
+
+    channels_sessions = ChannelsSessionManager(config, deps.file_manager)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         yield
         await manager.shutdown()
+        # 视频号嗅探会话兜底停止（还原系统代理；未运行时幂等）。
+        try:
+            await channels_sessions.stop()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("停止视频号嗅探会话异常: %s", exc)
         await deps.db.close()
 
     app = FastAPI(
@@ -981,6 +1153,63 @@ def build_app(config: ConfigLoader) -> FastAPI:
             "path": result["path"],
             "items": result["items"],
         }
+
+    # ------------------------------------------------------------------
+    # 微信视频号嗅探会话（channels/ 包；网页控制台「视频号」页使用）
+    # ------------------------------------------------------------------
+
+    @app.get("/api/v1/channels/status")
+    async def channels_status() -> Dict[str, Any]:
+        return channels_sessions.status()
+
+    @app.get("/api/v1/channels/certificate")
+    async def channels_certificate() -> Dict[str, Any]:
+        return channels_sessions.status()["certificate"]
+
+    @app.post("/api/v1/channels/certificate/install")
+    async def channels_certificate_install() -> Dict[str, Any]:
+        try:
+            return await channels_sessions.install_certificate()
+        except ChannelsSessionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/v1/channels/start")
+    async def channels_start(body: Dict[str, Any] = Body(default={})) -> Dict[str, Any]:
+        try:
+            return await channels_sessions.start(
+                port=body.get("port"),
+                auto_download=body.get("auto_download"),
+                database=await deps.ensure_db(),
+            )
+        except ChannelsSessionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/v1/channels/stop")
+    async def channels_stop() -> Dict[str, Any]:
+        return await channels_sessions.stop()
+
+    @app.get("/api/v1/channels/feeds")
+    async def channels_feeds(limit: int = Query(200, ge=1, le=2000)) -> Dict[str, Any]:
+        return channels_sessions.feeds(limit=limit)
+
+    @app.post("/api/v1/channels/feeds/{feed_id}/download")
+    async def channels_feed_download(feed_id: str) -> Dict[str, Any]:
+        try:
+            return await channels_sessions.download_feed(feed_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="feed not found") from None
+        except ChannelsSessionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/v1/channels/auto-download")
+    async def channels_auto_download(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+        enabled = body.get("enabled")
+        if not isinstance(enabled, bool):
+            raise HTTPException(status_code=400, detail="enabled (bool) is required")
+        try:
+            return await channels_sessions.set_auto_download(enabled)
+        except ChannelsSessionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return app
 

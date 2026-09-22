@@ -71,6 +71,53 @@ cookies:
     assert cookies["msToken"] == "token"
 
 
+@pytest.mark.parametrize(
+    "bilibili_block",
+    [
+        # 字典写法：照抄 config.example.yml 的空占位
+        'cookies:\n    SESSDATA: ""\n    bili_jct: ""',
+        # 字符串写法：键在、值空
+        'cookie: "SESSDATA=; bili_jct="',
+    ],
+)
+def test_bilibili_cookies_with_empty_placeholders_count_as_unconfigured(tmp_path, bilibili_block):
+    # 空占位若被当成"已配置"，CLI 会拿空 Cookie 去做登录校验并抛 -101，
+    # 用户按模板配好、还没填值时 B 站链路就会整条崩掉。
+    config_file = tmp_path / "config.yml"
+    config_file.write_text(
+        f"""
+link:
+  - https://www.bilibili.com/video/BV1xx411c7mD
+path: ./Downloaded/
+bilibili:
+  {bilibili_block}
+"""
+    )
+
+    loader = ConfigLoader(str(config_file))
+
+    assert loader.get_bilibili_cookies() == {}
+
+
+def test_bilibili_cookies_keep_filled_values_and_drop_only_empty_ones(tmp_path):
+    config_file = tmp_path / "config.yml"
+    config_file.write_text(
+        """
+link:
+  - https://www.bilibili.com/video/BV1xx411c7mD
+path: ./Downloaded/
+bilibili:
+  cookies:
+    SESSDATA: "abc%2Cdef"
+    bili_jct: ""
+"""
+    )
+
+    loader = ConfigLoader(str(config_file))
+
+    assert loader.get_bilibili_cookies() == {"SESSDATA": "abc%2Cdef"}
+
+
 def test_config_loader_reads_auto_cookies_from_default_file(tmp_path):
     config_file = tmp_path / "config.yml"
     config_file.write_text(

@@ -38,7 +38,7 @@ class ProgressDisplay:
         banner = """
 ╔══════════════════════════════════════════╗
 ║     Video Batch Downloader v2.0.0        ║
-║     抖音 / 哔哩哔哩 批量下载工具          ║
+║     抖音 / 哔哩哔哩 / 多平台 批量下载工具 ║
 ╚══════════════════════════════════════════╝
         """
         self._active_console().print(banner, style="bold cyan")

@@ -236,6 +236,134 @@ bilibili:
     series: true
     favlist: true
 
+# ============================================================================
+# 其他知名视频平台（可选，yt-dlp 引擎）
+# ----------------------------------------------------------------------------
+# 触发方式：把链接混进上面的 link 列表即可，程序按域名自动分流。需要先安装
+# yt-dlp：`pip install yt-dlp`（已包含在 requirements.txt 中）。首批支持：
+#   爱奇艺     https://www.iqiyi.com/v_xxxxx.html
+#   腾讯视频   https://v.qq.com/x/cover/xxx/yyy.html
+#   优酷       https://v.youku.com/v_show/id_xxx.html
+#   芒果 TV    https://www.mgtv.com/b/xxx/yyy.html
+#   快手       https://www.kuaishou.com/short-video/xxx  或  v.kuaishou.com 短链
+#   西瓜视频   https://www.ixigua.com/xxx
+#   今日头条   https://www.toutiao.com/video/xxx
+#   微博       https://weibo.com/tv/show/xxx
+#   小红书     https://www.xiaohongshu.com/explore/xxx  或  xhslink.com 短链
+# 剧集页 / 列表页会自动展开成多条，受 number.video 截断。
+#
+# 能力边界（务必了解）：
+#   - VIP 专享内容受 DRM（ChinaDRM / Widevine）保护，任何工具都无法直接下载，
+#     即使配置了会员 Cookie 也不行；
+#   - 免费内容、试看片段、以及登录后可看的非 DRM 内容可以下载；
+#   - 配置对应平台的 Cookie 通常能解锁更高清晰度（如爱奇艺未登录只有 480P）。
+#
+# 各平台实测状态（yt-dlp 2026.08.19，站方改版后可能变化）：
+#   - 腾讯视频 / 微博 / 今日头条：免登录可直接下载；
+#   - 西瓜视频：需要配置 Cookie（无需登录，但站方要求带 Cookie）；
+#   - 爱奇艺大陆站 iqiyi.com：yt-dlp 解析器上游当前失效（网页模板已改），
+#     待上游修复后 `pip install -U yt-dlp` 即可；国际站 iq.com 可用但需要
+#     安装 PhantomJS（https://phantomjs.org/download.html）并放入 PATH；
+#   - 快手：yt-dlp 没有专用解析器，属尽力而为。
+#
+# 抖音侧的大部分配置对这些平台同样生效：path、thread、retry_times、proxy、
+# filename_template / folder_template、folderstyle、author_dir、group_by_mode、
+# database、redownload_missing_files。
+#
+# 输出目录结构：Downloaded/{作者或平台名}/{平台键}/2026-01-01_标题_iqiyi_123/...
+ytdlp:
+  enabled: true
+
+  # 按平台单独开关；缺省视为开启。键名：
+  #   iqiyi / tencent / youku / mgtv / kuaishou / xigua / toutiao / weibo / xiaohongshu
+  platforms: {}
+  #   iqiyi: true
+  #   tencent: false
+
+  # 按平台配置登录 Cookie。浏览器登录后 F12 → Network → 任意请求 → 请求头
+  # 里的 Cookie 整段复制。字符串与字典两种写法都可以：
+  cookies: {}
+  #   iqiyi: "P00001=xxx; QC005=yyy; ..."
+  #   tencent:
+  #     vqq_vuserid: xxx
+  #     vqq_access_token: yyy
+
+  # 或者直接指定浏览器插件（如 Get cookies.txt LOCALLY）导出的 Netscape 格式
+  # cookies.txt，对所有平台生效，优先级高于上面的 cookies。
+  # 也可用环境变量 YTDLP_COOKIE_FILE 指定。
+  cookie_file: ""
+
+  # 画质偏好：highest / lowest / 4k / 2k / 1080p / 720p / 480p / 360p。
+  # 指定档位不可用时自动降级；实际上限由账号权限与站方策略决定。
+  quality: highest
+
+  # 只下载音频轨，保存为 .m4a。
+  audio_only: false
+
+  # 附带产物开关（默认全关）：
+  #   download_cover     封面图
+  #   download_subtitle  中文字幕（站方提供时）
+  #   download_json      yt-dlp 的原始信息 {stem}.info.json
+  download_cover: false
+  download_subtitle: false
+  download_json: false
+
+  # ffmpeg 路径。分离音视频轨的站点合并依赖 ffmpeg；留空时用打包内置的静态
+  # 二进制，其次搜索系统 PATH。
+  ffmpeg_path: ""
+
+  # 逃生舱：直接透传给 yt-dlp 的额外选项（键名同 yt-dlp Python API）。
+  # 例如遇到地区限制可试 geo_bypass；需要自定义 UA 可写 http_headers。
+  extra_options: {}
+  #   geo_bypass: true
+  #   http_headers:
+  #     User-Agent: "Mozilla/5.0 ..."
+
+  # 数量上限，0 = 不限。剧集页 / 列表页展开后按此截断。
+  number:
+    video: 0
+
+  # 磁盘增量：按 <平台>_<视频ID> 判定，已存在的跳过。
+  increase:
+    video: true
+
+# ---------------------------------------------------------------------------
+# 微信视频号（嗅探下载）
+#
+# 视频号没有免登录网页版：登录态只存在于本机微信客户端的内嵌浏览器里，
+# 所以这里的形态是「嗅探」——启动本机 MITM 代理（需要 mitmproxy：
+# pip install ".[channels]"），被动读取微信流量中的视频直链与 ISAAC64
+# 解密密钥（decodeKey 随接口明文下发），捕获后下载。首次使用需在弹出的
+# Windows 确认框里信任本机生成的根证书（每机唯一，存于 ~/.mitmproxy）。
+#
+# 用法：python run.py --channels（或网页控制台「视频号」页启动嗅探），
+# 然后在本机微信里打开视频号刷视频即可自动捕获下载。方案参考
+# ltaoo/wx_channels_download，但不注入微信页面，对微信前端改版零依赖。
+# ---------------------------------------------------------------------------
+channels:
+  # 嗅探功能开关。
+  enabled: true
+
+  # 捕获到新视频后是否自动下载；false 时只进列表，网页/CLI 里手动挑选。
+  auto_download: true
+
+  # 画质偏好：highest / lowest / 1080p / 720p / 480p …，匹配不到自动回退
+  # 到微信下发版本。
+  quality: highest
+
+  # 本机嗅探代理端口（换端口需重启嗅探会话）。
+  proxy_port: 8899
+
+  # 自动模式下是否录制正在直播的 FLV 流（时长无上界，默认关；
+  # 列表里可随时手动开始录制）。直播回放是普通加密视频，自动捕获下载。
+  live_record: false
+
+  # 附带下载封面图。
+  download_cover: false
+
+  # 增量下载：按 channels_<作品ID> 判重，磁盘已有即跳过。
+  increase: true
+
 cookies:
   msToken: YOUR_MS_TOKEN
   ttwid: YOUR_TTWID
