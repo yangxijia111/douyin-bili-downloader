@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="img/logo.png" width="120" alt="douyin-bili-downloader" />
+</p>
+
 # douyin-bili-downloader
 
 [中文](#中文) | [English](#english)
