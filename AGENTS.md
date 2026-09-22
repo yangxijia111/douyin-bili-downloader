@@ -15,7 +15,7 @@ A Python-based Douyin (TikTok China) batch downloader that fetches videos, galle
 | `config.example.yml` | Example YAML config for users to copy and customize |
 | `requirements.txt` | Pinned dependency list (mirrors pyproject.toml) |
 | `Dockerfile` | Container build for the downloader |
-| `PROJECT_SUMMARY.md` | Architecture overview document |
+| `README.md` | Bilingual project documentation (features, usage, structure) |
 
 ## Subdirectories
 
@@ -23,13 +23,15 @@ A Python-based Douyin (TikTok China) batch downloader that fetches videos, galle
 |-----------|---------|
 | `auth/` | Cookie and MS token management (see `auth/AGENTS.md`) |
 | `bilibili/` | Bilibili downloads (single video incl. multi-page, user uploads, collections/series, favourites, `b23.tv` short links). Parallel implementation to `core/` with its own domain model (bvid/cid/WBI signing/DASH) that reuses only the infra layer (`storage`, `control`, `cli` progress, `utils.naming`). Also hosts `security.py`: outbound-URL scheme whitelist + private/reserved-address blocklist applied to every stream/subtitle/short-link request. Platform routing happens in `cli.main.download_url` / `server.app._execute_download` before any client is built (`bilibili.url_parser.detect_platform`). |
+| `ytdlp/` | Other major platforms (iQIYI, Tencent Video, Youku, Mango TV, Kuaishou, Xigua, Toutiao, Weibo, Xiaohongshu) delegated to the yt-dlp engine. Parallel to `core/` and `bilibili/`: `url_parser.py` holds the domain → platform registry (`SUPPORTED_PLATFORMS`, `detect_ytdlp_platform`), `downloader.py` wires yt-dlp's Python API (options, Netscape cookie file, ffmpeg, progress hooks bridged via `call_soon_threadsafe`) to the shared `FileManager` / `utils.naming` / `aweme` table (`aweme_type="ytdlp_<platform>"`, `aweme_id="<platform>_<id>"`). Errors are classified as `drm` / `login` / `geo` / `unsupported` / `generic` so CLI/Server can give actionable hints. Routing order in both entry points: Bilibili → ytdlp → Douyin fallback. Per-platform credentials live under `ytdlp.cookies.<platform>`; `_config_snapshot()` in `cli.main` / `server.app` strips them (and every other platform's) before history rows are written. |
+| `channels/` | WeChat Channels (Shipinhao) — the fourth platform link, **sniffer-shaped** (no login-free web API exists). `interceptor.py` embeds mitmproxy programmatically (optional extra `pip install ".[channels]"`, Python 3.10+) and manages the per-machine root cert (`~/.mitmproxy`, install via `certutil -addstore -user Root`) plus the Windows system proxy (HKCU registry + WinINET refresh, always restored via try/finally). `SnifferAddon` passively parses API responses (recursive `objectDesc` scan — no path whitelist, resilient to WeChat revisions; unlike the reference project wx_channels_download we inject/rewrite nothing). `feed.py` models captures (kind: video/image/live; `decodeKey` is a uint64 shipped as a JSON string); `isaac64.py` ports the ISAAC-64 keystream (seed `Seed[0]=decodeKey`, verified against the standard all-zero-seed first output `0x9d39247e33776d41`); only the first 131072 bytes of each MP4 are XOR-encrypted and are decrypted streaming during download with an MP4 `ftyp` self-check. `downloader.py` reuses `FileManager`/`naming`/`aweme` table (`aweme_id="channels_<objectId>"`); `live.py` records live FLV via ffmpeg. `worker.py` is the shared auto-download consumer (CLI `--channels` session in `cli/channels_session.py` and `server/channels.py` session manager + `/api/v1/channels/*` endpoints + web console "Shipinhao" tab). Shipinhao links cannot be direct-downloaded (browser has no WeChat auth): both entry points route them to a sniff-mode hint via `channels.url_parser.is_channels_url`. |
 | `cli/` | CLI argument parsing, main async loop, progress display (see `cli/AGENTS.md`) |
 | `config/` | YAML config loading, env var overrides, defaults (see `config/AGENTS.md`) |
 | `control/` | Concurrency control — rate limiter, retry handler, queue manager (see `control/AGENTS.md`) |
 | `core/` | Business logic — API client, URL parser, downloaders, strategy pattern (see `core/AGENTS.md`) |
 | `server/` | FastAPI REST API + optional web console host (`app.py`, `jobs.py`, `progress.py`). Serves `web/index.html` and exposes config / history / stats / discovery endpoints plus per-job pause/resume/cancel. `progress.py` bridges `core`'s progress callbacks into the job object; `jobs.py` sets `CURRENT_JOB` (ContextVar) so the executor can find its job without changing its signature. CLI-only; the desktop sibling ships a richer server. |
 | `storage/` | SQLite database, file management, metadata handling (see `storage/AGENTS.md`) |
-| `tests/` | Pytest test suite with 23 test modules (see `tests/AGENTS.md`) |
+| `tests/` | Pytest test suite with 80 test modules (see `tests/AGENTS.md`) |
 | `tools/` | Standalone utilities like browser-based cookie fetching (see `tools/AGENTS.md`) |
 | `utils/` | Shared helpers — logging, validation, anti-bot signatures (see `utils/AGENTS.md`) |
 | `web/` | Single-file web console (`index.html`) — offline, no CDN, vanilla JS. Talks to `server/app.py` over `/api/v1/*`. Not a Python package; served via `FileResponse`. |
@@ -42,21 +44,6 @@ A Python-based Douyin (TikTok China) batch downloader that fetches videos, galle
 - Entry point is `cli.main:main()` which calls `asyncio.run(main_async(args))`
 - Config is YAML-based with env var overrides (`DOUYIN_*` prefix)
 - The `mix`/`allmix` config alias system requires special handling (see `config/config_loader.py`)
-
-### Shared Logic With Desktop
-- This project shares Python backend logic with `/Users/crimson/codes/douyin/douyin-downloader-desktop`.
-- When fixing shared logic in `auth/`, `cli/`, `config/`, `control/`, `core/`, `storage/`, `tools/`, `utils/`, or shared tests, apply the equivalent fix in both projects unless the difference is explicitly desktop-only or CLI-only.
-- Before finishing a shared-logic fix, compare the touched shared files against the sibling project and either keep them identical or document the intentional divergence.
-- **Sync script:** `../douyin-downloader-desktop/scripts/sync-to-cli.sh` copies all shared files from the desktop project here. Run `--check` to detect drift.
-- **Intentional divergences** (these files differ by design):
-  - `cli/main.py` — CLI omits desktop-only `_verify_self_checksum()` and `_enforce_license_at_startup()`.
-  - `run.py` — CLI is a simple bootstrap; desktop has sidecar startup + data-dir migration.
-  - `server/app.py`, `server/jobs.py` — CLI server is a simplified subset; desktop adds license, SSE, overrides, cancel.
-  - `control/__init__.py` — CLI doesn't export `ProgressReporter` classes (desktop UI only).
-  - `core/retry_executor.py` — CLI retains an unwired legacy copy; the active desktop implementation depends on desktop-only platform routing and is not auto-synced.
-  - `utils/proxy.py` — desktop-only policy for following the OS proxy when the app proxy setting is blank; CLI keeps explicit-only proxy semantics.
-  - `storage/database.py` — desktop adds TikTok, Following, and My Content schema/helpers; only dependency-neutral database tests remain byte-identical.
-  - `tests/test_database_platform.py`, `tests/test_database_desktop_schema.py`, `tests/test_retry_executor.py` — desktop-only tests and not present here.
 
 ### Testing Requirements
 - Run: `python -m pytest tests/`
@@ -83,6 +70,7 @@ A Python-based Douyin (TikTok China) batch downloader that fetches videos, galle
 
 ### Optional
 - `playwright` — browser automation for cookie fetching
+- `mitmproxy` — WeChat Channels sniffer engine (`channels/`, extra `channels`, Python 3.10+)
 - `openai-whisper` — audio transcription
 
 <!-- MANUAL: -->

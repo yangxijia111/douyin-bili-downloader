@@ -25,6 +25,7 @@ env/
 
 # OS files
 .DS_Store
+Thumbs.db
 
 # Logs
 logs/
@@ -37,6 +38,7 @@ dy_downloader.db
 *.db
 *.db-shm
 *.db-wal
+*.db-journal
 *.sqlite
 *.sqlite3
 
@@ -45,6 +47,12 @@ config*.yml
 !config.example.yml
 .cookies.json
 config/cookies.json
+cookies.json
+cookies.txt
+*.cookie
+.env
+.env.*
+!.env.example
 .omx/
 
 # Editor / IDE local settings
@@ -58,5 +66,7 @@ config/cookies.json
 .mimosa/
 .workbuddy/
 .hypothesis/
+.zcode/
 _run_tests.py
 _pytest_out.txt
+_check*.txt
