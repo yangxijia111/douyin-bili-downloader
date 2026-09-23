@@ -336,6 +336,9 @@ tbody tr:hover{background:var(--bg3)}
             <span style="font-size:12.5px;color:var(--muted)">根证书：</span>
             <span id="chCertText" style="font-size:12.5px;font-family:var(--mono)">—</span>
             <button class="btn ghost mini" id="chInstallBtn">安装证书</button>
+            <button class="btn ghost mini" id="chCertDetailBtn">详情</button>
+            <button class="btn ghost mini" id="chUninstallBtn">卸载证书</button>
+            <button class="btn ghost mini" id="chRepairNetBtn" title="恢复上次异常退出残留的系统代理（幂等）">恢复网络</button>
             <span id="chStatsText" style="font-size:12.5px;color:var(--muted);margin-left:auto"></span>
           </div>
           <p class="hint" id="chHint" style="margin-top:8px"></p>
@@ -478,11 +481,27 @@ async function api(path, options) {
     opts.headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(opts.body);
   }
+  // 远程访问认证（server/auth.py）：环回地址无需 token；从非本机访问且
+  // 服务端配置了 auth_token 时，携带 X-Auth-Token（存 sessionStorage）。
+  const authToken = sessionStorage.getItem("authToken");
+  if (authToken) opts.headers["X-Auth-Token"] = authToken;
   let resp;
   try {
     resp = await fetch(apiUrl(path), opts);
   } catch (err) {
     throw new Error("无法连接服务：" + err.message);
+  }
+  if (resp.status === 401 || resp.status === 403) {
+    const supplied = sessionStorage.getItem("authToken");
+    if (!supplied) {
+      const token = window.prompt(
+        "该服务要求远程访问令牌（服务端 server.auth_token 或环境变量 DOWNLOADER_API_TOKEN）。请输入："
+      );
+      if (token) {
+        sessionStorage.setItem("authToken", token);
+        return api(path, options);
+      }
+    }
   }
   const text = await resp.text();
   let data = null;
@@ -1442,6 +1461,44 @@ document.getElementById("chInstallBtn").addEventListener("click", async function
     toast("证书已安装", "ok");
   } catch (err) { toast(err.message, "err"); }
   btn.textContent = "安装证书";
+  loadChannelsAll();
+});
+
+document.getElementById("chCertDetailBtn").addEventListener("click", async function () {
+  const hint = document.getElementById("chHint");
+  try {
+    const c = await api("/api/v1/channels/certificate");
+    if (!c.exists) {
+      hint.textContent = "尚未生成嗅探根证书（首次启动嗅探时自动生成）。";
+      return;
+    }
+    hint.textContent = "SHA-256: " + (c.sha256_fingerprint || "—") +
+      " · Subject: " + (c.subject || "—") +
+      " · 有效期: " + (c.not_before || "?").slice(0, 10) + " → " + (c.not_after || "?").slice(0, 10) +
+      (c.installed ? " · 已受信任" : " · 未受信任");
+  } catch (err) { toast(err.message, "err"); }
+});
+
+document.getElementById("chUninstallBtn").addEventListener("click", async function () {
+  const btn = this;
+  if (!window.confirm("确定卸载嗅探根证书？\n只删除本项目本机 CA 指纹对应的那张证书；卸载后需重新「安装证书」才能再次嗅探。")) return;
+  btn.disabled = true;
+  try {
+    const r = await api("/api/v1/channels/certificate/uninstall", { method: "POST" });
+    toast(r.detail || "证书已卸载", "ok");
+  } catch (err) { toast(err.message, "err"); }
+  btn.disabled = false;
+  loadChannelsAll();
+});
+
+document.getElementById("chRepairNetBtn").addEventListener("click", async function () {
+  const btn = this;
+  btn.disabled = true;
+  try {
+    const r = await api("/api/v1/channels/network/repair", { method: "POST" });
+    toast(r.detail || r.action || "已执行网络恢复检查", "ok");
+  } catch (err) { toast(err.message, "err"); }
+  btn.disabled = false;
   loadChannelsAll();
 });
 

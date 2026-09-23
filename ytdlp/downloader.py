@@ -44,6 +44,7 @@ from utils.naming import (
     render_template,
 )
 
+from .options_policy import UNSAFE_TOGGLE_KEY, apply_extra_options
 from .url_parser import PLATFORM_BY_KEY, SUPPORTED_PLATFORMS, platform_display_name
 
 logger = setup_logger("YtdlpDownloader")
@@ -559,9 +560,15 @@ class YtdlpDownloader:
             options["writeinfojson"] = True
 
         extra = self.ytd("extra_options")
-        if isinstance(extra, dict):
-            # 逃生舱：用户可直接透传 yt-dlp 选项（如 ``geo_bypass``、``http_headers``）。
-            options.update(extra)
+        if isinstance(extra, dict) and extra:
+            # 逃生舱走白名单分级（见 ytdlp.options_policy）：默认只放行无本地
+            # 副作用的参数；outtmpl / exec_cmd 等危险参数需显式
+            # ytdlp.unsafe_extra_options: true，未知键一律报错。
+            apply_extra_options(
+                options,
+                extra,
+                unsafe_enabled=self._as_bool(UNSAFE_TOGGLE_KEY, False),
+            )
         return options
 
     # ------------------------------------------------------------------

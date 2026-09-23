@@ -1,0 +1,44 @@
+{
+  "ret": 0,
+  "data": {
+    "data": [],
+    "feedList": [
+      {
+        "objectId": "14059479562123456796",
+        "objectNonceId": "nonce_dup_a",
+        "contact": {
+          "nickname": "重复作者"
+        },
+        "objectDesc": {
+          "mediaType": 4,
+          "description": "重复示例",
+          "media": [
+            {
+              "url": "https://finder.video.qq.com/dup.mp4?sig=old",
+              "urlToken": "&idx=1",
+              "decodeKey": "7106243968264845317"
+            }
+          ]
+        }
+      },
+      {
+        "objectId": "14059479562123456796",
+        "objectNonceId": "nonce_dup_b",
+        "contact": {
+          "nickname": "重复作者"
+        },
+        "objectDesc": {
+          "mediaType": 4,
+          "description": "重复示例",
+          "media": [
+            {
+              "url": "https://finder.video.qq.com/dup.mp4?sig=fresh",
+              "urlToken": "&idx=2",
+              "decodeKey": "7106243968264845317"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

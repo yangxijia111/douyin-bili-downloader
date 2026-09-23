@@ -13,6 +13,16 @@ imageio-ffmpeg==0.6.0
 # （ytdlp/ 包）。站方改版时先 `pip install -U yt-dlp` 更新解析器。
 yt-dlp>=2025.1.1
 
-# 可选：微信视频号嗅探下载（channels/ 包）。不在主依赖里，按需安装：
-#   pip install ".[channels]"
-# mitmproxy 10+ 要求 Python 3.10+。
+# ----------------------------------------------------------------------------
+# 可选 extras（不在主依赖里，按需安装，见 pyproject.toml [project.optional-dependencies]）：
+#   pip install ".[channels]"   微信视频号嗅探下载。mitmproxy 10+ 要求 Python 3.10+；
+#                               版本约束 >=10.1,<13（大版本升级需先过 channels 测试）。
+#   pip install ".[server]"     REST API + Web 控制台（fastapi + uvicorn）。
+#   pip install ".[all]"        全部可选能力。
+#
+# 版本策略：
+#   * 本文件与 pyproject 保持**范围声明**（含 yt-dlp 无上界），普通用户安装
+#     可跟随上游解析器/安全修复更新；
+#   * 需要确定性构建（CI / 复现问题）时用 requirements.lock 锁定快照，
+#     其与 pyproject 的约束一致性由 tests/test_dependency_consistency.py 守护。
+# ----------------------------------------------------------------------------

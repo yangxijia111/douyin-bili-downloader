@@ -821,8 +821,52 @@ async def _dispatch_notifications(config: ConfigLoader, total_result: Any, url_c
         logger.warning("Notification dispatch error: %s", exc)
 
 
+def _run_channels_uninstall_ca() -> None:
+    """``--channels-uninstall-ca``：按本机 CA 指纹精确卸载嗅探根证书。"""
+    from channels.interceptor import CertificateManager
+
+    manager = CertificateManager()
+    if not manager.ca_cert_path.exists():
+        display.print_warning("未找到本机嗅探 CA 证书（可能从未生成过），无需卸载。")
+        return
+    info = manager.certificate_info()
+    display.print_info(f"本机 CA 指纹 SHA-256: {info['sha256_fingerprint']}")
+    try:
+        ok, detail = manager.uninstall()
+    except RuntimeError as exc:
+        display.print_error(str(exc))
+        return
+    if ok:
+        display.print_success(f"卸载完成：{detail}")
+    else:
+        display.print_error(f"卸载失败：{detail}")
+
+
+def _run_repair_network() -> None:
+    """``--repair-network``：恢复上次异常退出残留的系统代理（幂等）。"""
+    from channels.proxy_recovery import recover_stale_proxy
+
+    try:
+        report = recover_stale_proxy()
+    except RuntimeError as exc:
+        display.print_error(str(exc))
+        return
+    action, detail = report["action"], report["detail"]
+    if action == "restored":
+        display.print_success(f"已恢复系统代理：{detail}")
+    elif action == "kept":
+        display.print_info(f"无需修改：{detail}")
+    elif action == "skipped":
+        display.print_warning(f"跳过：{detail}")
+    else:
+        display.print_info("没有发现需要恢复的代理记录。")
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Douyin Downloader - 抖音批量下载工具")
+    parser = argparse.ArgumentParser(
+        prog="douyin-dl",
+        description="多平台视频批量下载工具（抖音 / B站 / 微信视频号 / 爱奇艺 / 腾讯视频 / 优酷等）",
+    )
     parser.add_argument("-u", "--url", action="append", help="Download URL(s)")
     parser.add_argument("-c", "--config", help="Config file path (default: config.yml)")
     parser.add_argument("-p", "--path", help="Save path")
@@ -870,13 +914,31 @@ def main():
         default=None,
         help="视频号嗅探代理端口（默认取 channels.proxy_port 配置，8899）",
     )
+    parser.add_argument(
+        "--channels-uninstall-ca",
+        action="store_true",
+        help="卸载视频号嗅探根证书（只删除当前用户 Root 存储中本机 CA 指纹的那张）",
+    )
+    parser.add_argument(
+        "--repair-network",
+        action="store_true",
+        help="检查并恢复上次异常退出残留的系统代理（幂等；不会覆盖你手动改过的设置）",
+    )
     try:
         from __init__ import __version__
     except ImportError:
-        __version__ = "2.0.0"
+        __version__ = "2.0.1"
     parser.add_argument("--version", action="version", version=__version__)
 
     args = parser.parse_args()
+
+    # 维护类子命令不依赖 config.yml，先于主流程短路处理。
+    if getattr(args, "channels_uninstall_ca", False):
+        _run_channels_uninstall_ca()
+        return
+    if getattr(args, "repair_network", False):
+        _run_repair_network()
+        return
 
     if args.verbose:
         set_console_log_level(logging.INFO)

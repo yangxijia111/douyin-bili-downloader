@@ -1289,6 +1289,10 @@ def _seconds_to_timestamp(value: Any) -> str:
 
 
 def _write_text(path: Path, text: str) -> bool:
+    # 守卫：先规范化（. 与 .. 归零），拒绝空路径。
+    path = Path(path).resolve()
+    if str(path) in ("", str(Path.cwd())):
+        return False
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as handle:

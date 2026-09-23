@@ -235,6 +235,8 @@ class ConfigLoader:
                     value = list(value)
                 existing[key] = value
 
+        # 守卫：写盘前把目标规范化为绝对路径，避免相对路径随 cwd 漂移。
+        target = Path(target).resolve()
         try:
             with open(target, "w", encoding="utf-8") as handle:
                 yaml.safe_dump(existing, handle, allow_unicode=True, sort_keys=False)

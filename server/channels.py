@@ -7,13 +7,15 @@ CLI 的 ``--channels`` 是独占前台会话；Server 形态下嗅探会话由 R
 端点（在 ``server.app.build_app`` 里挂载）::
 
     GET  /api/v1/channels/status                     会话与证书状态
-    GET  /api/v1/channels/certificate                证书详情
+    GET  /api/v1/channels/certificate                证书详情（指纹/subject/有效期）
     POST /api/v1/channels/certificate/install        安装证书（弹 Windows 确认框）
+    POST /api/v1/channels/certificate/uninstall      卸载证书（按本机 CA 指纹精确删除）
     POST /api/v1/channels/start                      启动嗅探（可带 port/auto_download）
     POST /api/v1/channels/stop                       停止嗅探并还原系统代理
-    GET  /api/v1/channels/feeds                      捕获列表（最新在前）
+    GET  /api/v1/channels/feeds                      捕获列表（最新在前，脱敏视图）
     POST /api/v1/channels/feeds/{feed_id}/download   手动下载/录制单条
     POST /api/v1/channels/auto-download              运行中开关自动下载
+    POST /api/v1/channels/network/repair             恢复异常退出残留的系统代理
 
 手动下载与自动下载共用一个 :class:`~channels.downloader.ChannelsDownloader`
 实例（连接池共享）；手动下载以后台 task 执行，前端通过轮询 feeds 列表里的
@@ -71,10 +73,11 @@ class ChannelsSessionManager:
             "running": self._running is not None,
             "mitmproxy_available": mitmproxy_available(),
             "enabled": bool(self._section().get("enabled", True)),
+            # 证书详情（含路径 / 指纹 / 有效期）只经
+            # GET /api/v1/channels/certificate 按需提供，状态轮询不需要。
             "certificate": {
                 "exists": cert_exists,
                 "installed": cert_exists and self._cert_manager.is_installed(),
-                "path": str(self._cert_manager.ca_cert_path),
             },
             "auto_download": bool(self._section().get("auto_download", True)),
         }
@@ -96,12 +99,17 @@ class ChannelsSessionManager:
         return payload
 
     def feeds(self, *, limit: int = 200) -> Dict[str, Any]:
-        """捕获列表（最新在前）+ 会话统计。"""
+        """捕获列表（最新在前）+ 会话统计。
+
+        只返回 :meth:`ChannelFeed.to_public_dict` 脱敏视图：直链、decodeKey
+        等下载敏感字段不出进程。手动下载端点用 feed_id 在服务端取回完整
+        对象，前端无需直链。
+        """
         if self._running is None:
             return {"running": False, "feeds": []}
         store: FeedStore = self._running["store"]
         stats: DownloadResult = self._running["stats"]
-        items = [feed.to_dict() for feed in reversed(store.all())]
+        items = [feed.to_public_dict() for feed in reversed(store.all())]
         return {
             "running": True,
             "auto_download": self._running["auto"],
@@ -136,6 +144,24 @@ class ChannelsSessionManager:
             )
         return {"ok": True}
 
+    def certificate(self) -> Dict[str, Any]:
+        """证书完整状态（生成/信任/指纹/路径/subject/有效期）。"""
+        info = self._cert_manager.certificate_info()
+        info["mitmproxy_available"] = mitmproxy_available()
+        return info
+
+    async def uninstall_certificate(self) -> Dict[str, Any]:
+        ok, detail = self._cert_manager.uninstall()
+        if not ok:
+            raise ChannelsSessionError(detail)
+        return {"ok": True, "detail": detail}
+
+    def repair_network(self) -> Dict[str, Any]:
+        """恢复上次异常退出残留的系统代理（CLI --repair-network 共用逻辑）。"""
+        from channels.proxy_recovery import recover_stale_proxy
+
+        return recover_stale_proxy()
+
     # ------------------------------------------------------------------
     # 启停
     # ------------------------------------------------------------------
@@ -166,6 +192,10 @@ class ChannelsSessionManager:
                 else self._section().get("auto_download", True)
             )
             live_record = bool(self._section().get("live_record", False))
+            # MITM 解密白名单扩展（默认只有 weixin.qq.com，见 channels.domains）。
+            extra_domains = self._section().get("intercept_domains")
+            if not isinstance(extra_domains, (list, tuple)):
+                extra_domains = ()
 
             self._cert_manager.ensure_ca()
             if not self._cert_manager.is_installed():
@@ -175,9 +205,17 @@ class ChannelsSessionManager:
                     "或在「视频号」页点击「安装证书」。"
                 )
 
+            # 先处理上次异常退出可能残留的系统代理（不能覆盖用户新设置）。
+            from channels.proxy_recovery import recover_stale_proxy
+
+            recovery_report = recover_stale_proxy()
+            if recovery_report["action"] == "restored":
+                logger.warning("已自动恢复上次异常退出残留的系统代理: %s", recovery_report["detail"])
+
             store = FeedStore()
             interceptor = ChannelsInterceptor(
-                store, port=listen_port, cert_manager=self._cert_manager
+                store, port=listen_port, cert_manager=self._cert_manager,
+                extra_domains=extra_domains,
             )
             try:
                 await interceptor.start()

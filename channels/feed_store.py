@@ -108,19 +108,38 @@ class FeedStore:
         if downloaded_paths:
             feed.downloaded_paths = list(downloaded_paths)
 
+    # 淘汰优先级（最旧优先）：终态先走（failed → skipped → done），
+    # pending 其后；downloading 尽量保留。全部不可淘汰时按插入序兜底，
+    # 保证 max_items 是严格上限、长时间捕获不会无界增长。
+    _EVICT_ORDER = ("failed", "skipped", "done", "pending")
+
+    def _remove(self, key: str) -> None:
+        """删除条目并同步清理 feed_id / object_id 两个索引，防止 stale index。"""
+        feed = self._feeds.pop(key, None)
+        if feed is None:
+            return
+        for index_key in (feed.feed_id, feed.object_id):
+            if index_key and self._id_index.get(index_key) == key:
+                self._id_index.pop(index_key, None)
+
     def _trim(self) -> None:
-        """超过容量时淘汰最旧的 pending/failed 条目（done 状态保留，供增量判断展示）。"""
+        """超过容量时按优先级淘汰最旧条目，维持严格上限。
+
+        ``downloading`` 条目仅在「除它之外无可淘汰且仍超限」的极端场景下按
+        插入序兜底移除——此时下载协程持有 feed 对象本身，下载照常完成并落
+        库/落盘，只是捕获列表里不再展示这条记录。
+        """
         if len(self._feeds) <= self.max_items:
             return
         overflow = len(self._feeds) - self.max_items
-        drop_keys = []
-        for key, feed in self._feeds.items():
-            if overflow == 0:
-                break
-            if feed.status in ("pending", "failed"):
-                drop_keys.append(key)
-                overflow -= 1
-        for key in drop_keys:
-            feed = self._feeds.pop(key, None)
-            if feed:
-                self._id_index.pop(feed.feed_id, None)
+        for status in self._EVICT_ORDER:
+            for key, feed in list(self._feeds.items()):
+                if overflow <= 0:
+                    return
+                if feed.status == status:
+                    self._remove(key)
+                    overflow -= 1
+        # 兜底：清完可淘汰状态仍超限（理论上只在大量并发 downloading 时发生）。
+        while overflow > 0 and self._feeds:
+            self._remove(next(iter(self._feeds)))
+            overflow -= 1

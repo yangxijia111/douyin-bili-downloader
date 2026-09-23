@@ -142,6 +142,14 @@ server:
   max_jobs: 500
   job_ttl_seconds: 86400   # 完成态 job 保留 24 小时
 
+  # REST API 远程访问令牌。默认服务只监听 127.0.0.1，本机请求免认证；
+  # 一旦用 --serve-host 0.0.0.0 / 局域网 IP / :: 对外开放，远程客户端必须
+  # 携带 X-Auth-Token（或 Authorization: Bearer）访问 /api/*。
+  # 留空 + 对外监听时：远程请求一律 403 拒绝（宁不可用，不裸奔）。
+  # 也可用环境变量 DOWNLOADER_API_TOKEN 注入（优先级更高）。
+  # 安全提示：不建议把 REST 服务暴露到公网；此键不可通过 HTTP API 修改。
+  auth_token: ""
+
 # ============================================================================
 # 哔哩哔哩下载（可选）
 # ----------------------------------------------------------------------------
@@ -312,12 +320,20 @@ ytdlp:
   # 二进制，其次搜索系统 PATH。
   ffmpeg_path: ""
 
-  # 逃生舱：直接透传给 yt-dlp 的额外选项（键名同 yt-dlp Python API）。
-  # 例如遇到地区限制可试 geo_bypass；需要自定义 UA 可写 http_headers。
+  # 逃生舱：透传给 yt-dlp 的额外选项（键名同 yt-dlp Python API），走白名单
+  # 分级（见 ytdlp/options_policy.py）：
+  #   * 默认只放行无本地副作用的网络/性能参数（geo_bypass、http_headers、
+  #     socket_timeout、limit_rate 等）；
+  #   * outtmpl / exec_cmd / external_downloader / cookiefile / proxy 等
+  #     「可写任意文件 / 执行命令 / 调本机可执行文件」的危险参数必须显式
+  #     打开 unsafe_extra_options 才生效；
+  #   * 未知参数一律报错拒绝；批次里有一个被拒则整个批次不生效。
+  # 此段与 unsafe_extra_options 都不能通过 Web API 的 overrides 传入。
   extra_options: {}
   #   geo_bypass: true
   #   http_headers:
   #     User-Agent: "Mozilla/5.0 ..."
+  unsafe_extra_options: false
 
   # 数量上限，0 = 不限。剧集页 / 列表页展开后按此截断。
   number:
@@ -363,6 +379,12 @@ channels:
 
   # 增量下载：按 channels_<作品ID> 判重，磁盘已有即跳过。
   increase: true
+
+  # MITM 解密白名单扩展。默认只解密 weixin.qq.com 的子域（视频号 API 所在
+  # 域）；其余全部流量（QQ 其它子域、CDN、无关网站）直接隧道转发不解密。
+  # 一般无需修改；确有新的必需域名时先在 channels/domains.py 补充依据。
+  # 注意：这是「允许解密的域」白名单，不要写成 .qq.com 这类宽后缀。
+  # intercept_domains: []
 
 cookies:
   msToken: YOUR_MS_TOKEN

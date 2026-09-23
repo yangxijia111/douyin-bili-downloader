@@ -59,7 +59,9 @@ def test_health_endpoint(tmp_path):
     with TestClient(app) as client:
         resp = client.get("/api/v1/health")
         assert resp.status_code == 200
-        assert resp.json() == {"status": "ok"}
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert body["version"]  # 版本号随 2.0.1 元数据统一（见 server.app）
 
 
 def test_download_endpoint_creates_job(tmp_path, monkeypatch):

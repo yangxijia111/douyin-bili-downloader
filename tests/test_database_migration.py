@@ -13,7 +13,6 @@ Covers task 1.2 of the desktop-ux-overhaul spec:
 """
 
 import json
-import re
 
 import aiosqlite
 

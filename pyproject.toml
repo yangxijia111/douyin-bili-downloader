@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "douyin-downloader"
-version = "2.0.0"
-description = "Douyin batch downloader with no-watermark support"
+version = "2.0.1"
+description = "Multi-platform video batch downloader (Douyin / Bilibili / WeChat Channels / iQIYI / Tencent Video / Youku etc.) with CLI and Web console"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.9"
@@ -51,7 +51,9 @@ browser = [
 channels = [
     # 视频号嗅探引擎（channels/）。mitmproxy 10+ 要求 Python 3.10+；
     # 3.9 环境装不上该 extra，嗅探功能不可用（其余平台不受影响）。
-    "mitmproxy>=10.1; python_version >= '3.10'",
+    # 上界 <13：mitmproxy 大版本升级曾改变内部 API（allow_hosts / addon
+    # 事件），大版本升级需先过 tests/test_channels_* 再放开。
+    "mitmproxy>=10.1,<13; python_version >= '3.10'",
 ]
 transcribe = [
     "openai-whisper>=20231117",
@@ -70,6 +72,8 @@ dev = [
     # test_notifier_redactor_property.py, test_proxy_validator_parity.py).
     # Missing hypothesis caused 3 collection errors pre-fix.
     "hypothesis>=6.0",
+    # tests/test_dependency_consistency.py 在 Python 3.9/3.10 上读 pyproject。
+    "tomli>=1.1; python_version < '3.11'",
 ]
 all = [
     "douyin-downloader[browser,channels,transcribe,server,dev]",
@@ -78,7 +82,7 @@ all = [
 [project.scripts]
 douyin-dl = "cli.main:main"
 
-[project.setuptools.packages.find]
+[tool.setuptools.packages.find]
 include = [
   "cli*",
   "core*",

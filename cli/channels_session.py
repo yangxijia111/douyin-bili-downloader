@@ -114,6 +114,10 @@ async def run_channels_session(config: ConfigLoader, *, port: Optional[int] = No
     listen_port = int(port or section.get("proxy_port", 8899) or 8899)
     auto_download = bool(section.get("auto_download", True))
     live_record = bool(section.get("live_record", False))
+    # MITM 解密白名单扩展（默认只有 weixin.qq.com，见 channels.domains）。
+    extra_domains = section.get("intercept_domains")
+    if not isinstance(extra_domains, (list, tuple)):
+        extra_domains = ()
 
     store = FeedStore()
     cert_manager = CertificateManager()
@@ -130,6 +134,15 @@ async def run_channels_session(config: ConfigLoader, *, port: Optional[int] = No
     proxy_manager = SystemProxyManager()
     stats = DownloadResult()
 
+    # 先处理上次异常退出可能残留的系统代理（不能覆盖用户新设置）。
+    from channels.proxy_recovery import recover_stale_proxy
+
+    report = recover_stale_proxy()
+    if report["action"] == "restored":
+        display.print_warning(f"检测到上次异常退出残留的系统代理，已自动恢复：{report['detail']}")
+    elif report["action"] == "kept":
+        display.print_info(f"代理恢复检查：{report['detail']}")
+
     display.print_info(
         f"启动嗅探代理 127.0.0.1:{listen_port} 并接管系统代理……"
         "（本机微信的视频号页面流量将被读取；结束后自动还原）"
@@ -137,7 +150,10 @@ async def run_channels_session(config: ConfigLoader, *, port: Optional[int] = No
     tasks = []
     interceptor: Optional[ChannelsInterceptor] = None
     try:
-        interceptor = ChannelsInterceptor(store, port=listen_port, cert_manager=cert_manager)
+        interceptor = ChannelsInterceptor(
+            store, port=listen_port, cert_manager=cert_manager,
+            extra_domains=extra_domains,
+        )
         await interceptor.start()
         try:
             proxy_manager.enable(port=listen_port)

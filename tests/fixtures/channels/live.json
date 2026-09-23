@@ -1,0 +1,26 @@
+{
+  "data": {
+    "data": [
+      {
+        "objectId": "14059479562123456791",
+        "objectNonceId": "nonce_live_01",
+        "createtime": 1727000200,
+        "contact": {
+          "nickname": "直播作者",
+          "username": "vph_demo0003"
+        },
+        "anchorContact": {
+          "liveCoverImgUrl": "https://finder.video.qq.com/live_cover.jpg"
+        },
+        "liveInfo": {
+          "streamUrl": "https://finder.live.qq.com/demo.flv?txSecret=demo"
+        },
+        "objectDesc": {
+          "mediaType": 9,
+          "description": "示例直播",
+          "media": []
+        }
+      }
+    ]
+  }
+}

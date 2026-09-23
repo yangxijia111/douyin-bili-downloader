@@ -36,6 +36,10 @@ class CookieManager:
             # defensively so a first-run login can't lose cookies to a
             # missing parent dir.
             self.cookie_file.parent.mkdir(parents=True, exist_ok=True)
+            # 守卫：凭据文件绝不经符号链接写入（链接可能指向任意路径，
+            # 登录凭据会被写到守卫范围之外）。
+            if self.cookie_file.is_symlink():
+                raise RuntimeError(f"Cookie 文件异常（符号链接）: {self.cookie_file}")
             with open(self.cookie_file, "w", encoding="utf-8") as f:
                 json.dump(self.cookies, f, ensure_ascii=False, indent=2)
             # Restrict perms to owner-only on POSIX. Windows uses ACL-based

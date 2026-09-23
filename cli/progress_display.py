@@ -37,7 +37,7 @@ class ProgressDisplay:
     def show_banner(self):
         banner = """
 ╔══════════════════════════════════════════╗
-║     Video Batch Downloader v2.0.0        ║
+║     Video Batch Downloader v2.0.1        ║
 ║     抖音 / 哔哩哔哩 / 多平台 批量下载工具 ║
 ╚══════════════════════════════════════════╝
         """

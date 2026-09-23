@@ -1,0 +1,51 @@
+{
+  "data": {
+    "data": [
+      {
+        "objectId": "14059479562123456793",
+        "objectNonceId": "nonce_mq_001",
+        "createtime": 1727000400,
+        "contact": {
+          "nickname": "画质作者",
+          "username": "vph_demo0004"
+        },
+        "objectDesc": {
+          "mediaType": 4,
+          "description": "多清晰度示例",
+          "media": [
+            {
+              "url": "https://finder.video.qq.com/251/20350/mq_demo.mp4",
+              "urlToken": "dis_k=mq",
+              "decodeKey": "7106243968264845314",
+              "fileSize": 20971520,
+              "videoPlayLen": 60,
+              "coverUrl": "https://finder.video.qq.com/mq_cover.jpg",
+              "spec": [
+                {
+                  "fileFormat": "hd",
+                  "width": 1920,
+                  "height": 1080
+                },
+                {
+                  "fileFormat": "bd",
+                  "width": 1280,
+                  "height": 720
+                },
+                {
+                  "fileFormat": "sd",
+                  "width": 854,
+                  "height": 480
+                },
+                {
+                  "fileFormat": "fhd60",
+                  "width": 1920,
+                  "height": 1080
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

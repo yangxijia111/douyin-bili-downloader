@@ -37,7 +37,7 @@ A multi-platform batch downloader for Douyin, Bilibili, WeChat Channels, and yt-
 
 - 抖音：无水印优先、自动选择最高码率、封面 / 音乐 / 头像 / JSON 元数据一并保存
 - 哔哩哔哩：画质 / 编码 / 音质可配置，增量下载按 `bvid + 分 P` 粒度补齐
-- 微信视频号：不注入、不改写微信前端，仅被动嗅探本机流量；视频仅前 128 KiB 加密，流式解密并做 MP4 魔数自校验
+- 微信视频号：不注入、不改写微信前端（不依赖其 DOM / JS bundle），仅被动嗅探本机流量，显著降低前端改版导致的失效概率；仍依赖视频号 API 数据结构、字段、加密方式及 CDN 行为。视频仅前 128 KiB 加密，流式解密并做 MP4 魔数自校验。MITM 解密范围限定在 `weixin.qq.com` 域名白名单内，其余流量不解密
 - 其他平台：单视频与剧集列表页均可，按平台配置 Cookie，画质可选，失败时分类提示（DRM / 需登录 / 地区限制 / 站方改版）
 
 **工程能力**
@@ -119,6 +119,8 @@ python run.py -c config.yml
 | `--serve-port PORT` | 服务监听端口（默认 `8000`） |
 | `--channels` | 进入微信视频号嗅探会话（需安装 `mitmproxy`，即 `pip install ".[channels]"`） |
 | `--channels-port` | 嗅探代理端口（默认取 `channels.proxy_port` 配置，8899） |
+| `--channels-uninstall-ca` | 卸载嗅探根证书（按本机 CA 指纹精确删除，不触碰其它证书） |
+| `--repair-network` | 检查并恢复上次异常退出残留的系统代理（幂等；不覆盖你手动改过的设置） |
 | `--version` | 显示版本号 |
 
 ### 典型用法
@@ -193,7 +195,13 @@ pip install ".[channels]"    # 一次性安装可选依赖（Python 3.10+）
 python run.py --channels
 ```
 
-首次使用需在 Windows 证书确认对话框中信任本地生成的根证书（每机唯一，存于 `~/.mitmproxy`，会话结束后自动恢复系统代理）。详见 `config.example.yml` 的 `channels` 配置段。
+首次使用需在 Windows 证书确认对话框中信任本地生成的根证书（每机唯一，存于 `~/.mitmproxy`；会话结束后自动恢复系统代理；异常强杀导致的代理残留会在下次启动时自动检测恢复，也可 `python run.py --repair-network` 手动恢复）。
+
+**能力边界（如实说明）**：此方案不依赖微信前端 DOM 和 JS bundle 注入，可显著降低前端页面改版造成的失效概率；**仍依赖**视频号 API 数据结构（`objectDesc` / `media` / `mediaType` / `liveInfo`）、字段（`decodeKey`）、ISAAC64 加密方式及 CDN URL 行为——微信协议层改动仍可能需要适配更新。
+
+**MITM 最小权限**：HTTPS 解密仅限 `weixin.qq.com` 域名白名单（视频号 API 所在域，见 `channels/domains.py`），QQ 其它子域、CDN 与无关网站一律隧道转发不解密；如需扩展须通过 `channels.intercept_domains` 配置并自担评估责任。
+
+**证书生命周期**：`python run.py --channels-uninstall-ca` 可精确卸载根证书（按本机 CA 指纹删除，不触碰其它证书）；网页控制台「视频号」页提供安装 / 卸载 / 详情入口。详见 `SECURITY.md`。详见 `config.example.yml` 的 `channels` 配置段。
 
 #### 直播录制（实验性）
 
@@ -228,9 +236,13 @@ pip install fastapi uvicorn    # 一次性可选依赖
 python run.py --serve --serve-port 8000
 ```
 
-启动后访问 <http://127.0.0.1:8000/> ，提供总览、链接下载（批量提交、可直接粘贴 App 分享文案自动提取链接）、任务中心（实时进度条、暂停 / 继续 / 取消 / 重试）、数据发现、下载档案与配置中心六个页签。下载任务后台异步执行；凭据字段不会下发到浏览器。
+启动后访问 <http://127.0.0.1:8000/> ，提供总览、链接下载（批量提交、可直接粘贴 App 分享文案自动提取链接）、任务中心（实时进度条、暂停 / 继续 / 取消 / 重试）、数据发现、下载档案、配置中心与视频号嗅探等页签。下载任务后台异步执行；凭据字段不会下发到浏览器。
 
 ### REST API
+
+> **远程访问与认证（2.0.1）**：服务默认监听 `127.0.0.1`，本机请求免认证，行为与旧版一致。若用 `--serve-host 0.0.0.0` / 局域网 IP / `::` 对外开放，远程请求必须携带令牌——先在 `config.yml` 配置 `server.auth_token`（或环境变量 `DOWNLOADER_API_TOKEN`），请求头带 `X-Auth-Token: <token>`（网页控制台会自动弹窗询问）。未配置令牌时远程请求一律 `403` 拒绝。**不建议把 REST 服务暴露到公网**，详见 `SECURITY.md`。
+
+服务模式暴露的主要端点：
 
 服务模式暴露的主要端点：
 
@@ -472,6 +484,8 @@ python run.py -c config.yml
 | `--serve-port PORT` | Listen port (default `8000`) |
 | `--channels` | Enter a WeChat Channels sniffing session (requires `mitmproxy`, i.e. `pip install ".[channels]"`) |
 | `--channels-port` | Sniffer proxy port (default: `channels.proxy_port` config, 8899) |
+| `--channels-uninstall-ca` | Uninstall the sniffer root CA (exact fingerprint match; never touches other certificates) |
+| `--repair-network` | Detect and restore a system proxy left behind by an abnormal exit (idempotent; never overrides your manual changes) |
 | `--version` | Show version |
 
 ### Typical Usage

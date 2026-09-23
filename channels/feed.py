@@ -14,7 +14,9 @@ finderPcFlow / finderUserPage / live_replay_list 等）只在微信内嵌浏览�
 提取策略是**递归宽松扫描**：不按具体接口路径过滤（路径随微信版本频繁变
 化），而是遍历响应 JSON 的每个层级，凡出现 ``objectDesc`` 结构就尝试解析。
 原项目 wx_channels_download 依赖 30 个正则改写微信前端 JS 源码，微信一改
-版即失效（其 issue #558）；本项目不注入页面，对这些改版零依赖。
+版即失效（其 issue #558）；本项目不注入页面，显著降低前端改版导致的失效
+概率——但仍依赖 ``objectDesc`` / ``media`` / ``decodeKey`` / ``mediaType`` /
+``liveInfo`` 这些 API 字段结构与 ISAAC64 / CDN 行为，协议层改动仍需适配。
 
 字段路径参考 wx_channels_download 的 ``inject/channels.utils.js``
 ``format_feed``（MIT + Commons Clause，允许借鉴）。
@@ -116,6 +118,11 @@ class ChannelFeed:
         return f"channels_{self.object_id or self.nonce_id}"
 
     def to_dict(self) -> Dict[str, Any]:
+        """完整内部视图：含直链、decodeKey 等下载必需的敏感字段。
+
+        **只允许进程内使用**（下载器、CLI 会话）。对外（REST / Web）必须走
+        :meth:`to_public_dict`，避免把临时 CDN 直链与解密密钥泄漏给浏览器端。
+        """
         return {
             "feed_id": self.feed_id,
             "object_id": self.object_id,
@@ -136,6 +143,32 @@ class ChannelFeed:
             "images": self.images,
             "bgm_url": self.bgm_url,
             "source_api": self.source_api,
+            "status": self.status,
+            "downloaded_paths": self.downloaded_paths,
+            "error": self.error,
+        }
+
+    def to_public_dict(self) -> Dict[str, Any]:
+        """对外展示视图（REST / Web 唯一允许的序列化）。
+
+        刻意排除：``url``（带一次性 CDN token 的直链）、``decode_key``（ISAAC64
+        解密种子）、``bgm_url`` / ``images``（同样是 CDN 直链）、``specs``（含
+        各档转码 URL 参数）、``source_api``（内部接口路径）、``object_id`` /
+        ``nonce_id``（``feed_id`` 已够前端定位条目）。网页控制台用不到这些
+        字段，就不外泄——内部下载走进程内对象，不需要 public model 之外的
+        通道。
+        """
+        return {
+            "feed_id": self.feed_id,
+            "kind": self.kind,
+            "media_type": self.media_type,
+            "title": self.title,
+            "author_name": self.author_name,
+            "author_id": self.author_id,
+            "cover_url": self.cover_url,
+            "create_time": self.create_time,
+            "duration": self.duration,
+            "file_size": self.file_size,
             "status": self.status,
             "downloaded_paths": self.downloaded_paths,
             "error": self.error,

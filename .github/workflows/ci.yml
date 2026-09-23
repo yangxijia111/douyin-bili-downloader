@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # ----------------------------------------------------------------------
+  # 核心矩阵：全部支持版本 × 双系统。只装 [dev]（无 fastapi / mitmproxy），
+  # server / channels 相关测试文件自带 importorskip 会自动跳过。
+  # ----------------------------------------------------------------------
+  core:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install (core + dev)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+      - name: Ruff
+        run: ruff check .
+      - name: Core tests
+        run: pytest -q
+      - name: Package smoke (core modules)
+        run: python scripts/ci_smoke.py cli core bilibili ytdlp
+
+  # ----------------------------------------------------------------------
+  # 视频号 / Server 矩阵：仅 Python 3.10+（mitmproxy 10+ 要求）。
+  # 测试全程 mock 系统证书存储与系统代理，CI 不会修改真实系统状态。
+  # ----------------------------------------------------------------------
+  channels-server:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.10", "3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install (core + channels + server + dev)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[channels,server,dev]
+      - name: Channels tests
+        run: pytest tests/test_channels_* -q
+      - name: Server tests
+        run: pytest tests/test_server.py tests/test_server_auth.py -q
+      - name: Package smoke (all modules)
+        run: python scripts/ci_smoke.py
+
+  # ----------------------------------------------------------------------
+  # 锁定版本矩阵：requirements.lock 在 Python 3.12 上的可复现验证。
+  # 3.9-3.11 不跑此作业——lock 以最新依赖为准，部分 pin 需要更高 Python。
+  # ----------------------------------------------------------------------
+  pinned:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install from requirements.lock
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock
+          pip install --no-deps -e .[channels,server,dev]
+      - name: Full tests (locked versions)
+        run: pytest -q
+
+  # ----------------------------------------------------------------------
+  # 构建门禁：sdist + wheel 必须可构建。
+  # ----------------------------------------------------------------------
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

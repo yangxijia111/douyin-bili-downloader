@@ -1,0 +1,29 @@
+{
+  "data": {
+    "data": [
+      {
+        "objectId": "14059479562123456792",
+        "objectNonceId": "nonce_replay_01",
+        "createtime": 1727000300,
+        "contact": {
+          "nickname": "直播作者",
+          "username": "vph_demo0003"
+        },
+        "objectDesc": {
+          "mediaType": 4,
+          "description": "直播回放：示例一场",
+          "media": [
+            {
+              "url": "https://finder.video.qq.com/251/20350/replay_demo.mp4",
+              "urlToken": "dis_k=replay",
+              "decodeKey": "7106243968264845313",
+              "fileSize": 104857600,
+              "videoPlayLen": 3661,
+              "coverUrl": "https://finder.video.qq.com/replay_cover.jpg"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

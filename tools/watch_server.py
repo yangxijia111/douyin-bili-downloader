@@ -87,6 +87,10 @@ class DownloadManager:
                 if err:
                     return {"ok": False, "error": err}
             MANAGED_LOG.parent.mkdir(parents=True, exist_ok=True)
+            # 守卫：受管日志必须落在项目目录内，防止常量被意外改写成项目外路径。
+            _log_resolved = MANAGED_LOG.resolve()
+            if PROJECT_ROOT.resolve() not in _log_resolved.parents:
+                return {"ok": False, "error": f"日志路径越界: {MANAGED_LOG}"}
             self.log_path = MANAGED_LOG
             lf = open(MANAGED_LOG, "wb")
             env = {**os.environ, "PYTHONIOENCODING": "utf-8"}

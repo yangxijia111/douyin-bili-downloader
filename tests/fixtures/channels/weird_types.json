@@ -1,0 +1,26 @@
+{
+  "data": {
+    "data": [
+      {
+        "objectId": "14059479562123456795",
+        "objectNonceId": "nonce_weird_1",
+        "createtime": null,
+        "objectDesc": {
+          "mediaType": "4",
+          "description": "类型异常示例",
+          "media": [
+            "not-a-dict",
+            {
+              "url": "https://finder.video.qq.com/251/20350/weird_demo.mp4",
+              "urlToken": "",
+              "decodeKey": 7106243968264845316,
+              "spec": {
+                "fileFormat": "hd"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

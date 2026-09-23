@@ -24,8 +24,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
-from fastapi import Body, FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, Response
+from fastapi import Body, FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 
 from auth import CookieManager
@@ -43,6 +43,11 @@ from config import ConfigLoader
 from control import QueueManager, RateLimiter, RetryHandler
 from core import UNSUPPORTED_URL_TYPE_DETAIL, DouyinAPIClient, DownloaderFactory, URLParser
 from core.discovery import dump_hot_board, search_and_dump
+from server.auth import (
+    AuthPolicy,
+    extract_presented_token,
+    resolve_auth_token,
+)
 from server.jobs import CURRENT_JOB, DownloadJob, JobManager
 from server.progress import JobProgressReporter
 from storage import Database, FileManager
@@ -63,7 +68,7 @@ logger = setup_logger("REST")
 try:  # 版本号在项目根的 __init__.py 里，缺失时退默认值
     from __init__ import __version__ as _VERSION
 except ImportError:  # pragma: no cover - 打包/独立运行场景
-    _VERSION = "2.0.0"
+    _VERSION = "2.0.1"
 
 # 网页控制台根目录（项目根 /web）
 _WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
@@ -133,6 +138,12 @@ _OVERRIDE_KEYS = frozenset(
         "ytdlp",
     }
 )
+
+# HTTP override 里 ytdlp 段不允许出现的键：extra_options 是 yt-dlp Python API
+# 逃生舱（含 outtmpl / exec_cmd 等可写盘、可执行命令的参数），unsafe 开关
+# 也不得经 HTTP 打开。两者只能由本机 config.yml 设置（见
+# ytdlp.options_policy，即便本机也默认只放行安全参数）。
+_HTTP_FORBIDDEN_YTDLP_KEYS = ("extra_options", "unsafe_extra_options")
 
 # 抖音 App「复制链接」拿到的其实是整条分享文案，例如：
 #   长按复制此条消息，打开抖音搜索，查看TA的更多作品。 https://v.douyin.com/xxxx/
@@ -287,6 +298,10 @@ def _redacted_config(config: Dict[str, Any]) -> Dict[str, Any]:
     transcript = out.get("transcript")
     if isinstance(transcript, dict) and transcript.get("api_key"):
         transcript["api_key"] = "***"
+    # server.auth_token 是 REST 认证凭据，绝不回显给浏览器。
+    server_section = out.get("server")
+    if isinstance(server_section, dict) and server_section.get("auth_token"):
+        server_section["auth_token"] = "***"
     return out
 
 
@@ -345,6 +360,15 @@ def _fork_config(base: ConfigLoader, overrides: Optional[Dict[str, Any]]) -> Con
     forked.config = deepcopy(base.config)
     forked.config_path = base.config_path
     safe = {k: v for k, v in overrides.items() if k in _OVERRIDE_KEYS}
+    ytdlp_section = safe.get("ytdlp")
+    if isinstance(ytdlp_section, dict) and _HTTP_FORBIDDEN_YTDLP_KEYS:
+        # Web API 用户不得借 overrides 间接构造任意 yt-dlp 参数（含 outtmpl /
+        # exec_cmd 等可写盘、可执行命令的能力）——见 ytdlp.options_policy。
+        sanitized = {k: v for k, v in ytdlp_section.items() if k not in _HTTP_FORBIDDEN_YTDLP_KEYS}
+        if sanitized:
+            safe["ytdlp"] = sanitized
+        else:
+            safe.pop("ytdlp", None)
     if safe:
         forked.update(**safe)
     return forked
@@ -836,13 +860,38 @@ def build_app(config: ConfigLoader) -> FastAPI:
         await deps.db.close()
 
     app = FastAPI(
-        title="Douyin Downloader API",
-        version="1.0",
-        description="REST API for dispatching Douyin download jobs.",
+        title="Douyin Bili Downloader API",
+        version=_VERSION,
+        description=(
+            "REST API for the multi-platform video downloader "
+            "(Douyin / Bilibili / WeChat Channels / yt-dlp engines)."
+        ),
         lifespan=lifespan,
     )
     app.state.job_manager = manager
     app.state.deps = deps
+
+    # ------------------------------------------------------------------
+    # 远程访问边界（server/auth.py）
+    # ------------------------------------------------------------------
+    # 环回客户端不受影响；非环回客户端必须携带 token（未配置 token 的
+    # 服务端对非环回一律 403）。覆盖全部 /api/*（含 channels、config、
+    # download、任务控制），仅 health 保持公开。
+    auth_policy = AuthPolicy(resolve_auth_token(config))
+    app.state.auth_policy = auth_policy
+    _AUTH_PUBLIC_PATHS = frozenset({"/api/v1/health"})
+
+    @app.middleware("http")
+    async def api_auth_boundary(request: Request, call_next):
+        path = request.url.path
+        if path.startswith("/api/") and path not in _AUTH_PUBLIC_PATHS:
+            client_host = request.client.host if request.client else ""
+            ok, status, detail = auth_policy.check(
+                client_host, extract_presented_token(request.headers)
+            )
+            if not ok:
+                return JSONResponse({"detail": detail}, status_code=status)
+        return await call_next(request)
 
     # ------------------------------------------------------------------
     # 网页可视化控制台
@@ -867,8 +916,9 @@ def build_app(config: ConfigLoader) -> FastAPI:
     # ------------------------------------------------------------------
 
     @app.get("/api/v1/health")
-    async def health() -> Dict[str, str]:
-        return {"status": "ok"}
+    async def health() -> Dict[str, Any]:
+        # 唯一公开的 API 端点：只含非敏感的策略摘要（是否要求 token）。
+        return {"status": "ok", "version": _VERSION, **auth_policy.describe()}
 
     @app.post("/api/v1/download", response_model=JobResponse)
     async def create_job(req: DownloadRequest) -> JobResponse:
@@ -953,6 +1003,13 @@ def build_app(config: ConfigLoader) -> FastAPI:
     @app.put("/api/v1/config")
     async def update_config(req: ConfigUpdateRequest) -> Dict[str, Any]:
         updates = {k: v for k, v in (req.updates or {}).items() if k in _EDITABLE_CONFIG_KEYS}
+        # auth_token 是 REST 认证凭据：不得经 HTTP 写入，否则远程匿名请求
+        # 可以先自设 token 再通过认证（自签发后门）。
+        server_section = updates.get("server")
+        if isinstance(server_section, dict) and "auth_token" in server_section:
+            server_section.pop("auth_token", None)
+            if not server_section:
+                updates.pop("server", None)
         if not updates:
             raise HTTPException(
                 status_code=400,
@@ -1164,12 +1221,20 @@ def build_app(config: ConfigLoader) -> FastAPI:
 
     @app.get("/api/v1/channels/certificate")
     async def channels_certificate() -> Dict[str, Any]:
-        return channels_sessions.status()["certificate"]
+        return channels_sessions.certificate()
 
     @app.post("/api/v1/channels/certificate/install")
     async def channels_certificate_install() -> Dict[str, Any]:
         try:
             return await channels_sessions.install_certificate()
+        except ChannelsSessionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/v1/channels/certificate/uninstall")
+    async def channels_certificate_uninstall() -> Dict[str, Any]:
+        """卸载嗅探根证书（仅删当前用户 Root 存储中本机 CA 指纹的那张）。"""
+        try:
+            return await channels_sessions.uninstall_certificate()
         except ChannelsSessionError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1211,6 +1276,11 @@ def build_app(config: ConfigLoader) -> FastAPI:
         except ChannelsSessionError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.post("/api/v1/channels/network/repair")
+    async def channels_network_repair() -> Dict[str, Any]:
+        """恢复上次异常退出残留的系统代理（幂等；不动用户手动改过的设置）。"""
+        return channels_sessions.repair_network()
+
     return app
 
 
@@ -1219,6 +1289,20 @@ async def run_server(config: ConfigLoader, *, host: str, port: int) -> None:
 
     app = build_app(config)
     logger.info("网页控制台: http://%s:%s/", host, port)
+    if not (host in ("127.0.0.1", "localhost", "::1") or host.startswith("127.")):
+        token = resolve_auth_token(config)
+        if token:
+            logger.warning(
+                "REST 服务监听在非环回地址 %s：远程请求必须携带 X-Auth-Token 认证头。", host
+            )
+        else:
+            logger.warning(
+                "REST 服务监听在非环回地址 %s 且未配置认证 token："
+                "非本机客户端对 /api/* 的请求将被一律拒绝（403）。"
+                "如需远程访问，请设置 server.auth_token 或环境变量 DOWNLOADER_API_TOKEN。"
+                "不建议把 REST 服务暴露到公网。",
+                host,
+            )
     uv_config = uvicorn.Config(app, host=host, port=port, log_level="info")
     server = uvicorn.Server(uv_config)
     await server.serve()
