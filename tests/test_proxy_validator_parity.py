@@ -34,6 +34,12 @@ import os
 from typing import Any, Dict, List, Optional
 
 import pytest
+
+try:
+    import fastapi  # noqa: F401  # server.app 依赖 fastapi
+except ImportError:  # core 矩阵（只装 [dev]）未安装 fastapi 时整文件跳过
+    pytest.skip("fastapi not installed", allow_module_level=True)
+
 from hypothesis import given
 from hypothesis import settings as hyp_settings
 from hypothesis import strategies as st

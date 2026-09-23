@@ -55,10 +55,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e .[channels,server,dev]
-      - name: Channels tests
-        run: pytest tests/test_channels_* -q
-      - name: Server tests
-        run: pytest tests/test_server.py tests/test_server_auth.py -q
+      # 装齐 server + channels 后跑全量：覆盖 core 矩阵因缺 fastapi 而跳过
+      # 的集成测试（test_bili_integration / test_lvdetail_gate /
+      # test_ytdlp_integration / test_download_proxy_passthrough /
+      # test_proxy_validator_parity）。测试全程 mock 系统状态。
+      - name: Full tests (floating versions)
+        run: pytest -q
       - name: Package smoke (all modules)
         run: python scripts/ci_smoke.py
 

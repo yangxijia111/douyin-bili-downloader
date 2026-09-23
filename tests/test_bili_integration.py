@@ -14,6 +14,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+try:
+    import fastapi  # noqa: F401  # server.app 依赖 fastapi
+except ImportError:  # core 矩阵（只装 [dev]）未安装 fastapi 时整文件跳过
+    pytest.skip("fastapi not installed", allow_module_level=True)
+
+
 from bilibili.api_client import BiliAPIClient, BiliLoginRequiredError, BiliRiskControlError
 from bilibili.collection_downloader import BiliCollectionDownloader
 from bilibili.security import assert_safe_url, is_safe_url

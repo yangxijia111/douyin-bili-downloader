@@ -14,6 +14,12 @@ import asyncio
 
 import pytest
 
+try:
+    import fastapi  # noqa: F401  # server.app 依赖 fastapi
+except ImportError:  # core 矩阵（只装 [dev]）未安装 fastapi 时整文件跳过
+    pytest.skip("fastapi not installed", allow_module_level=True)
+
+
 from config import ConfigLoader
 from core import UNSUPPORTED_URL_TYPE_DETAIL, DownloaderFactory
 from server.app import _execute_download, _ServerDeps

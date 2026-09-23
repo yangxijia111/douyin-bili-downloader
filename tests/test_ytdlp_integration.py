@@ -9,6 +9,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+try:
+    import fastapi  # noqa: F401  # server.app 依赖 fastapi
+except ImportError:  # core 矩阵（只装 [dev]）未安装 fastapi 时整文件跳过
+    pytest.skip("fastapi not installed", allow_module_level=True)
+
+
 from config import ConfigLoader
 from core.downloader_base import DownloadResult
 from server.app import _config_snapshot as server_config_snapshot
