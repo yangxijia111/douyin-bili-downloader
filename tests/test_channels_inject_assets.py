@@ -95,6 +95,15 @@ class TestBootstrapContract:
         for strategy in ALLOWED_PAGE_STRATEGIES:
             assert strategy in js, f"bootstrap 缺少策略标签 {strategy}"
 
+    def test_module_base_dir_has_virtual_fallback(self):
+        """页面模块基址必须兜底到 /__cuin/assets/（currentScript 在异步
+        加载时为 null，没有兜底会解析成页面相对路径）。"""
+        js = _read("bootstrap.js")
+        assert '"/__cuin/assets/"' in js
+        assert "document.currentScript" in js
+        # 不再有依赖执行期后调用 currentScript 的旧函数。
+        assert "function baseDir" not in js
+
     def test_module_files_referenced(self):
         js = _read("bootstrap.js")
         for module in ("channels_home.js", "channels_feed.js", "channels_live.js"):

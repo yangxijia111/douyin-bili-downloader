@@ -26,6 +26,16 @@
   var CAPTURE_DEBOUNCE = 300;
   var MAX_POLLS = 3600; // 任务轮询上限（直播录制可能很长）
 
+  // 页面模块基址：脚本**执行期**的 currentScript 才有效（异步加载时为
+  // null），兜底用注入 snippet 约定的虚拟路径。
+  var BASE_DIR = "/__cuin/assets/";
+  try {
+    var bootScript = document.currentScript;
+    if (bootScript && bootScript.src && bootScript.src.indexOf("/__cuin/") >= 0) {
+      BASE_DIR = bootScript.src.replace(/[^/]*$/, "");
+    }
+  } catch (e) { /* ignore */ }
+
   var state = {
     version: core.VERSION,
     page: "",
@@ -350,13 +360,6 @@
   // 页面模块注册 / 加载 / SPA 路由切换
   // ------------------------------------------------------------------
 
-  function baseDir() {
-    try {
-      var src = (document.currentScript && document.currentScript.src) || "";
-      return src ? src.replace(/[^/]*$/, "") : "";
-    } catch (e) { return ""; }
-  }
-
   var MODULE_FILES = {
     home: "channels_home.js",
     feed: "channels_feed.js",
@@ -367,9 +370,8 @@
   function loadScriptOnce(type) {
     if (state.loadedModules[type] || state.loadingModules[type]) return;
     state.loadingModules[type] = true;
-    var base = baseDir();
     var s = document.createElement("script");
-    s.src = base + (MODULE_FILES[type] || "channels_feed.js");
+    s.src = BASE_DIR + (MODULE_FILES[type] || "channels_feed.js");
     s.async = false;
     s.onload = function () {
       state.loadedModules[type] = true;
