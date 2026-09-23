@@ -96,6 +96,11 @@ class ChannelsDiagnostics:
         self._last_parse_error: str = ""
         self._last_page_type: str = ""
         self._last_page_url: str = ""
+        # 最近一次前端运行时探针（属性名/计数，无用户数据）。
+        self._last_probe: Dict[str, Any] = {}
+        # 最近命中的白名单域响应路径（不含查询串；有界环形缓冲，仅用于
+        # 真机诊断「数据到底从哪个接口来」——不记录任何正文/参数）。
+        self._candidate_paths: List[str] = []
         # 每种捕获策略各自成功入库的条数（A/B/C/D 占比一目了然）。
         self._strategy_stats: Dict[str, int] = {}
 
@@ -122,8 +127,27 @@ class ChannelsDiagnostics:
     def record_parse_error(self, reason: str) -> None:
         self._last_parse_error = str(reason)[:300]
 
+    def record_candidate_path(self, path: str) -> None:
+        """记录白名单域响应路径（去查询串，有界环形缓冲≤32 条）。
+
+        真机诊断用：当 parsed_feeds 长期为 0 时，这份路径清单能直接看出
+        微信的数据到底从哪些接口来（以及是否根本不是 HTTP 响应）。
+        """
+        from urllib.parse import urlsplit
+
+        clean = urlsplit(str(path) or "").path
+        if not clean:
+            return
+        self._candidate_paths.append(clean[:200])
+        if len(self._candidate_paths) > 32:
+            self._candidate_paths = self._candidate_paths[-32:]
+
+    def candidate_paths(self) -> List[str]:
+        return list(self._candidate_paths)
+
     def record_heartbeat(
-        self, *, page_type: str = "", page_url: str = "", buttons_created: int = 0
+        self, *, page_type: str = "", page_url: str = "", buttons_created: int = 0,
+        probe: Optional[Dict[str, Any]] = None,
     ) -> None:
         self._counters["frontend_heartbeat"] += 1
         self._last_heartbeat_at = time.time()
@@ -136,6 +160,19 @@ class ChannelsDiagnostics:
             self._counters["buttons_created"] = max(
                 self._counters["buttons_created"], buttons_created
             )
+        if isinstance(probe, dict):
+            # 页面运行时探针（属性名/计数，无用户数据）——真机诊断 hook 目标
+            # 是否存在、hook 是否装上、页面侧看到了多少数据。
+            video = probe.get("video")
+            self._last_probe = {
+                "hooked": list(probe.get("hooked") or [])[:16],
+                "fetch_hooked": bool(probe.get("fetch_hooked")),
+                "xhr_hooked": bool(probe.get("xhr_hooked")),
+                "index_size": int(probe.get("index_size") or 0),
+                "view_size": int(probe.get("view_size") or 0),
+                "window_keys": [str(k)[:64] for k in (probe.get("window_keys") or [])][:60],
+                "video": dict(video) if isinstance(video, dict) else None,
+            }
 
     # ------------------------------------------------------------------
     # 查询
@@ -307,6 +344,8 @@ class ChannelsDiagnostics:
             "last_feed_at": self._last_feed_at,
             "last_heartbeat_at": self._last_heartbeat_at,
             "last_parse_error": self._last_parse_error,
+            "candidate_paths": self.candidate_paths(),
+            "runtime_probe": dict(self._last_probe),
             "page_type": self._last_page_type,
             "page_url": self._last_page_url,
             "uptime_seconds": round(time.time() - self._started_at, 1),

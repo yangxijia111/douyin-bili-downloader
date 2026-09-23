@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "douyin-downloader"
-version = "2.0.2"
+version = "2.0.3"
 description = "Multi-platform video batch downloader (Douyin / Bilibili / WeChat Channels / iQIYI / Tencent Video / Youku etc.) with CLI and Web console"
 readme = "README.md"
 license = {text = "MIT"}

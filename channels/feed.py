@@ -36,6 +36,7 @@ __all__ = [
     "ChannelFeed",
     "clean_media_url",
     "extract_feeds",
+    "extract_preview_feeds",
     "pick_quality_url",
 ]
 
@@ -297,6 +298,85 @@ def extract_feeds(payload: Any, *, source_api: str = "") -> List[ChannelFeed]:
         except Exception:  # noqa: BLE001 —— 单节点解析失败不影响其余捕获
             continue
         if feed is None or not feed.dedup_key or feed.dedup_key in seen:
+            continue
+        seen.add(feed.dedup_key)
+        feeds.append(feed)
+    return feeds
+
+
+# ----------------------------------------------------------------------
+# 分享链接预览页（finder-preview）的 sceneInfo 模式
+# ----------------------------------------------------------------------
+
+def _collect_preview_nodes(node: Any, out: List[Dict[str, Any]], depth: int) -> None:
+    """递归收集 preview 页 sceneInfo 形态的 feed 节点。
+
+    预览页接口（getFeedInfo）返回的对象特征是含 ``videoUrl`` / ``picInfo``
+    字段（而不是 ``objectDesc``）——字段名来自对官方 preview bundle 的观察
+    （videoUrl / coverUrl / mediaType / description / nickname / id）。
+    """
+    if depth > 32 or node is None or not isinstance(node, (dict, list)):
+        return
+    if isinstance(node, list):
+        for item in node:
+            _collect_preview_nodes(item, out, depth + 1)
+        return
+    if isinstance(node.get("videoUrl"), str) or isinstance(node.get("picInfo"), list):
+        out.append(node)
+    for value in node.values():
+        _collect_preview_nodes(value, out, depth + 1)
+
+
+def _preview_feed_from_node(node: Dict[str, Any], source_api: str) -> Optional[ChannelFeed]:
+    video_url = _as_str(node.get("videoUrl"))
+    images = node.get("picInfo")
+    images = [i for i in images if isinstance(i, dict)] if isinstance(images, list) else []
+    if not video_url and not images:
+        return None
+    object_id = _as_str(node.get("id")) or _as_str(node.get("dynamicExportId"))
+    if not object_id:
+        return None
+    media_type = _as_int(node.get("mediaType"), MEDIA_TYPE_VIDEO)
+    item = ChannelFeed(
+        object_id=object_id,
+        nonce_id=_as_str(node.get("dynamicExportId")) or object_id,
+        media_type=media_type,
+        title=_as_str(node.get("description")) or object_id,
+        author_name=_as_str(node.get("nickname")),
+        author_id=_as_str(node.get("username")),
+        author_avatar=_as_str(node.get("headUrl") or node.get("avatar")),
+        create_time=_as_int(node.get("createTime")),
+        source_api=source_api,
+    )
+    if video_url:
+        item.kind = "video"
+        item.url = video_url
+        # 预览页不下发 decodeKey（页面自行解密）；下载时若头部校验失败，
+        # 由调用方按「可能未加密」重试（见 downloader 的宽容路径）。
+        item.decode_key = None
+        item.cover_url = _as_str(node.get("coverUrl"))
+        item.duration = _as_int(node.get("videoDuration") or node.get("duration"))
+        item.file_size = _as_int(node.get("fileSize") or node.get("videoSize"))
+        return item
+    # 图文：picInfo 是图片列表。
+    item.kind = "image"
+    item.images = [_as_str(i.get("url")) for i in images if _as_str(i.get("url"))]
+    item.cover_url = _as_str(node.get("coverUrl")) or (item.images[0] if item.images else "")
+    return item
+
+
+def extract_preview_feeds(payload: Any, *, source_api: str = "") -> List[ChannelFeed]:
+    """从 preview 页（分享链接）响应中提取 feed（sceneInfo 模式）。"""
+    nodes: List[Dict[str, Any]] = []
+    _collect_preview_nodes(payload, nodes, 0)
+    feeds: List[ChannelFeed] = []
+    seen: set = set()
+    for node in nodes:
+        try:
+            feed = _preview_feed_from_node(node, source_api)
+        except Exception:  # noqa: BLE001 —— 单节点失败不影响其余
+            continue
+        if feed is None or feed.dedup_key in seen:
             continue
         seen.add(feed.dedup_key)
         feeds.append(feed)

@@ -3,6 +3,61 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.3] - 2026-09-23
+
+视频号「粘贴分享链接下载」。Windows 真机实测确认：微信内视频号页面数据经
+**原生桥接**下发（不走 HTTP），被动嗅探与页面 fetch/XHR hook 均拿不到 feed；
+而分享链接会在微信内置浏览器打开独立的**预览页**（finder-preview），该页
+数据经页面自身 API 取回——把注入覆盖到预览页即可稳定捕获。
+
+### 新增（Added）
+
+- **分享链接下载**（`--channels-link <URL>` / 网页控制台「分享链接下载」输入框
+  / `POST /api/v1/channels/link`）：粘贴微信「分享 → 复制链接」得到的链接
+  （`https://weixin.qq.com/sph/<id>` 或全链），自动识别、启动嗅探会话（强制
+  自动下载）、尝试唤起链接，并引导在微信中打开；预览页加载后自动捕获并下载
+  目标视频，完成后自动结束会话。支持分享文案混排文本的链接抽取。
+- **预览页注入**：注入白名单扩展到 `/finder-preview/pages/{sph,feed,live,home}`
+  （分享链接在微信内置浏览器里的实际落点）；前端页面类型识别同步覆盖。
+- **preview 页 sceneInfo 模式提取**（`channels/feed.py: extract_preview_feeds`）：
+  预览页接口返回的对象特征是 `videoUrl` / `picInfo`（而非 `objectDesc`），
+  新增专用提取器；`FeedCapturePipeline` 在 objectDesc 提不到时自动回退到该
+  模式，被动嗅探的响应标记预检同步兼容 `videoUrl`。
+- **运行时探针**（随前端心跳回传）：`hooked`（运行时 hook 安装情况）/
+  `fetch_hooked` / `xhr_hooked` / `index_size` / window 上与 finder/feed 相关
+  的属性名 / 当前 video 元素的 src 与 outerHTML——真机诊断「数据到底从哪来」
+  的关键证据，只回传属性名与计数，不含用户正文。
+- **诊断路径清单**：`candidate_paths` 记录最近命中的白名单域响应路径（去查询
+  串，有界 32 条），`parsed_feeds` 长期为 0 时直接看出微信数据从哪些接口来。
+
+### 修复（Fixed）
+
+- **嵌入场景 mitmproxy ErrorCheck 崩溃（P1，真机实测发现）**：mitmproxy 的
+  ErrorCheck 插件在生命周期内出现任何 ERROR 级日志时于关闭时 `sys.exit(1)`，
+  与 FastAPI 共享事件循环时会炸掉整个服务进程（会话 stop 后服务端死亡、再次
+  start 500）。嵌入启动时移除该插件（addons.get("errorcheck") + remove +
+  finish），代理自身错误已由各 addon try/except 与诊断计数器覆盖。
+- **bootstrap 模块基址**：`document.currentScript` 只在脚本执行期有效，异步
+  加载页面模块时为 null 导致模块 URL 解析成页面相对路径（404、按钮不出现）；
+  改为执行期捕获 + `/__cuin/assets/` 兜底。
+- **Banner 版本号漂移**：CLI 横幅硬编码 v2.0.1，改为动态读取 `__init__`。
+
+### 变更（Changed）
+
+- `is_channels_url` 现在也识别分享链接（`weixin.qq.com/sph/<id>`）；
+  `CHANNELS_URL_HINT` 增加 `--channels-link` 引导。
+- 无 decodeKey 的预览页直链下载失败时给出可操作指引（提示改用微信内播放 +
+  页面按钮/嗅探列表路径），而不是笼统的「解密校验失败」。
+- 版本号 → 2.0.3。
+
+### 已知边界（如实说明）
+
+- 分享链接的数据捕获依赖「在微信内置浏览器里打开该链接」——工具会尝试自动
+  唤起（`cmd /c start`），失败时按引导手动打开即可。
+- 预览页不下发 `decodeKey`：若拿到的直链仍是加密流，会明确提示改用页面按钮
+  模式（该路径可取得 decodeKey）。真机验证见
+  `docs/testing/channels-windows-smoke.md` 第 13 项。
+
 ## [2.0.2] - 2026-09-23
 
 视频号运行时捕获与页面内下载版本。修复 Windows 真机「嗅探会话正常但始终

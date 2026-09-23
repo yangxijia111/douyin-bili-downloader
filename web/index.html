@@ -352,6 +352,12 @@ tbody tr:hover{background:var(--bg3)}
             <button class="btn ghost mini" id="chRepairNetBtn" title="恢复上次异常退出残留的系统代理（幂等）">恢复网络</button>
             <span id="chStatsText" style="font-size:12.5px;color:var(--muted);margin-left:auto"></span>
           </div>
+          <div class="row" style="margin-top:12px;align-items:flex-end;gap:10px;flex-wrap:wrap">
+            <label class="field" style="margin:0;flex:1;min-width:280px"><span>分享链接下载（微信「分享 → 复制链接」）</span>
+              <input type="text" id="chLinkInput" placeholder="https://weixin.qq.com/sph/..."></label>
+            <button class="btn" id="chLinkBtn" style="align-self:flex-end">识别并下载</button>
+          </div>
+          <p class="hint" id="chLinkHint" style="margin-top:8px"></p>
           <p class="hint" id="chHint" style="margin-top:8px"></p>
         </div>
         <div class="card">
@@ -1388,6 +1394,11 @@ async function loadChannelsStatus() {
   } else {
     document.getElementById("chStatsText").textContent = "";
   }
+  // 待处理的分享链接（链接下载模式引导）。
+  const linkHint = document.getElementById("chLinkHint");
+  if (s.link && s.link.share_id) {
+    linkHint.textContent = "等待分享链接 " + s.link.share_id + " 的视频：请在本机微信中打开该链接，捕获后自动下载。";
+  }
   chRenderDiagnostics(s);
 }
 
@@ -1564,6 +1575,27 @@ document.getElementById("chAutoDownload").addEventListener("change", async funct
   } catch (err) {
     toast(err.message, "err");
   }
+  loadChannelsAll();
+});
+
+/* 分享链接下载：识别 → 启动会话（强制自动下载）→ 引导在微信打开 */
+document.getElementById("chLinkBtn").addEventListener("click", async function () {
+  const btn = this;
+  const url = document.getElementById("chLinkInput").value.trim();
+  const hint = document.getElementById("chLinkHint");
+  if (!url) { toast("请先粘贴视频号分享链接", "err"); return; }
+  btn.disabled = true; btn.textContent = "识别中…";
+  try {
+    const r = await api("/api/v1/channels/link", { method: "POST", body: { url } });
+    hint.textContent = "已识别分享链接（id: " + esc(r.share_id || "?") + "）。" +
+      (r.link && r.link.guidance ? r.link.guidance : "请在本机微信中打开该链接。") +
+      " 预览页加载后自动捕获并下载，进度见下方捕获列表。";
+    toast("已启动链接下载，请在微信中打开该链接", "ok");
+  } catch (err) {
+    hint.textContent = "";
+    toast(err.message, "err");
+  }
+  btn.disabled = false; btn.textContent = "识别并下载";
   loadChannelsAll();
 });
 

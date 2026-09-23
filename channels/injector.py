@@ -48,9 +48,15 @@ __all__ = [
     "inject_bootstrap",
 ]
 
-# 视频号页面路径（查询串忽略）；至少覆盖 home / feed / live / profile。
+# 视频号页面路径（查询串忽略）。两类：
+#   1. /web/pages/{home,feed,live,profile} —— 微信内页面；
+#   2. /finder-preview/pages/{sph,feed,live,home} —— 分享链接预览页
+#      （在微信内置浏览器里打开，数据经页面自身 API 取回，是「粘贴分享
+#      链接下载」的捕获点，v2.0.3）。
 CHANNELS_PAGE_PATH_RE: Pattern[str] = re.compile(
-    r"^/web/pages/(?:home|feed|live|profile)(?:[/?.]|$)", re.IGNORECASE
+    r"^/(?:web/pages/(?:home|feed|live|profile)"
+    r"|finder-preview/pages/(?:sph|feed|live|home))(?:[/?.]|$)",
+    re.IGNORECASE,
 )
 
 # 虚拟资源路径（与 virtual_host.VIRTUAL_PREFIX 保持一致，由本机代理提供）。

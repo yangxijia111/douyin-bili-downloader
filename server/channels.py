@@ -31,6 +31,7 @@ ChannelsTaskHub`（与手动下载共用下载器），页面经代理的虚拟�
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any, Dict, Optional, Set
 
 from channels.diagnostics import ChannelsDiagnostics
@@ -53,6 +54,29 @@ logger = setup_logger("ChannelsSessionManager")
 __all__ = ["ChannelsSessionError", "ChannelsSessionManager"]
 
 
+def _try_open_link(url: str) -> None:
+    """尝试用系统默认方式打开链接（可能唤起微信；失败不影响手动打开）。"""
+    import subprocess
+    import sys
+
+    try:
+        if sys.platform == "win32":
+            subprocess.Popen(
+                ["cmd", "/c", "start", "", url],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        else:
+            subprocess.Popen(
+                ["xdg-open", url],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+    except Exception as exc:  # noqa: BLE001 —— 打不开不影响手动打开
+        logger.info("自动打开链接失败（请手动在微信中打开）: %s", exc)
+
+
 class ChannelsSessionError(RuntimeError):
     """会话操作失败（依赖缺失 / 证书未信任 / 端口占用等）。"""
 
@@ -70,6 +94,8 @@ class ChannelsSessionManager:
         self._cert_manager = CertificateManager()
         # 诊断计数器跨会话保留：停止会话后 Web 仍能看到最后一轮的链路状态。
         self.diagnostics = ChannelsDiagnostics()
+        # 分享链接下载的待处理链接（v2.0.3）。
+        self._pending_link: Optional[Dict[str, Any]] = None
         # Strategy D 补丁注册表（默认空；登记策略见 channels/patches.py）。
         self.patch_registry = PatchRegistry(diagnostics=self.diagnostics)
 
@@ -122,6 +148,8 @@ class ChannelsSessionManager:
                 self._running["stats"].success if self._running is not None else 0
             )
         )
+        if self._pending_link is not None:
+            payload["link"] = dict(self._pending_link)
         return payload
 
     def feeds(self, *, limit: int = 200) -> Dict[str, Any]:
@@ -338,6 +366,65 @@ class ChannelsSessionManager:
             raise ChannelsSessionError("嗅探会话未运行")
         self._running["auto"] = bool(enabled)
         return self.status()
+
+    # ------------------------------------------------------------------
+    # 分享链接下载（v2.0.3）
+    # ------------------------------------------------------------------
+
+    def parse_link(self, url: str) -> Dict[str, Any]:
+        """解析视频号分享链接（不启动会话，供前端预览确认）。"""
+        from channels.share_link import parse_share_link
+
+        link = parse_share_link(url)
+        if link is None:
+            raise ChannelsSessionError(
+                "无法识别为视频号分享链接。支持：https://weixin.qq.com/sph/<id> "
+                "或 https://channels.weixin.qq.com/finder-preview/pages/sph?id=<id>"
+            )
+        return {
+            "share_id": link.share_id,
+            "full_url": link.full_url,
+            "original": link.original,
+        }
+
+    async def start_link_session(self, url: str) -> Dict[str, Any]:
+        """分享链接下载：识别链接 → （按需）启动会话 → 返回引导信息。
+
+        会话以「强制自动下载」运行（用户意图明确=就要这个视频）：预览页在
+        微信内置浏览器里加载后，其 API 响应经注入脚本捕获 → FeedStore →
+        自动下载。前端轮询 feeds 查看进度。
+        """
+        from channels.share_link import parse_share_link
+
+        link = parse_share_link(url)
+        if link is None:
+            raise ChannelsSessionError(
+                "无法识别为视频号分享链接。支持：https://weixin.qq.com/sph/<id> "
+                "或 https://channels.weixin.qq.com/finder-preview/pages/sph?id=<id>"
+            )
+        self._pending_link = {
+            "share_id": link.share_id,
+            "full_url": link.full_url,
+            "original": link.original,
+            "started_at": time.time(),
+        }
+        if self._running is None:
+            await self.start(auto_download=True)
+        else:
+            # 已在运行：开启自动下载（链接模式语义）。
+            self._running["auto"] = True
+        _try_open_link(link.full_url)
+        payload = self.status()
+        payload["link"] = dict(self._pending_link)
+        payload["link"]["guidance"] = (
+            "请在本机微信里打开该链接（发送到任意聊天后点击，或浏览器打开后选择"
+            "「在微信中打开」）。预览页加载后工具自动捕获并下载该视频。"
+        )
+        return payload
+
+    def clear_link(self) -> Dict[str, Any]:
+        self._pending_link = None
+        return {"ok": True}
 
     async def download_feed(self, feed_id: str) -> Dict[str, Any]:
         """手动下载（或录制）单条；返回排队状态，进度看 feeds 列表。"""

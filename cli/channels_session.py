@@ -104,8 +104,18 @@ def _prepare_certificate(display: ProgressDisplay, cert_manager: CertificateMana
     return False
 
 
-async def run_channels_session(config: ConfigLoader, *, port: Optional[int] = None) -> None:
-    """CLI 嗅探会话主入口。"""
+async def run_channels_session(
+    config: ConfigLoader,
+    *,
+    port: Optional[int] = None,
+    link: Optional[Any] = None,
+) -> None:
+    """CLI 嗅探会话主入口。
+
+    ``link`` 为分享链接模式（v2.0.3）：粘贴视频号分享链接后启动，
+    强制自动下载（用户意图明确=就要这个视频），引导在微信里打开链接，
+    目标视频下载完成后自动结束会话。
+    """
     display = ProgressDisplay()
     if not mitmproxy_available():
         display.print_error(MITMPROXY_INSTALL_HINT)
@@ -124,7 +134,6 @@ async def run_channels_session(config: ConfigLoader, *, port: Optional[int] = No
     extra_domains = section.get("intercept_domains")
     if not isinstance(extra_domains, (list, tuple)):
         extra_domains = ()
-
     store = FeedStore()
     cert_manager = CertificateManager()
     if not _prepare_certificate(display, cert_manager):
@@ -154,10 +163,17 @@ async def run_channels_session(config: ConfigLoader, *, port: Optional[int] = No
     elif report["action"] == "kept":
         display.print_info(f"代理恢复检查：{report['detail']}")
 
+    # 分享链接模式：用户意图明确（就要这个视频），强制自动下载。
+    if link is not None:
+        auto_download = True
+
     display.print_info(
         f"启动嗅探代理 127.0.0.1:{listen_port} 并接管系统代理……"
         "（本机微信的视频号页面流量将被读取；结束后自动还原）"
     )
+    if link is not None:
+        _print_link_guidance(display, link)
+        _try_open_link(link.full_url)
     tasks = []
     interceptor: Optional[ChannelsInterceptor] = None
     try:
@@ -189,7 +205,8 @@ async def run_channels_session(config: ConfigLoader, *, port: Optional[int] = No
             )
 
         await _interactive_loop(
-            display, store, stats, diagnostics=diagnostics, auto_download=auto_download
+            display, store, stats, diagnostics=diagnostics, auto_download=auto_download,
+            link_mode=link is not None,
         )
     except KeyboardInterrupt:
         pass  # 正常退出路径：Ctrl+C
@@ -229,8 +246,13 @@ async def _interactive_loop(
     *,
     diagnostics: ChannelsDiagnostics,
     auto_download: bool,
+    link_mode: bool = False,
 ) -> None:
-    """rich Live 实时表格，Ctrl+C 打断返回。"""
+    """rich Live 实时表格，Ctrl+C 打断返回。
+
+    ``link_mode``：分享链接模式——目标视频下载成功后自动结束会话
+    （用户意图明确，不需要继续挂着代理）。
+    """
     from rich.console import Group
     from rich.live import Live
     from rich.table import Table
@@ -298,3 +320,52 @@ async def _interactive_loop(
             with contextlib.suppress(asyncio.TimeoutError):
                 await store.wait_for_new(timeout=0.5)
             live.update(Group(render_table(), render_chain(), hint))
+            if link_mode and _link_target_done(store, stats):
+                return  # 目标视频已下载完成：自动结束会话
+
+
+def _link_target_done(store: FeedStore, stats: DownloadResult) -> bool:
+    """分享链接模式的目标是否已完成（至少一条下载成功）。"""
+    return stats.success > 0
+
+
+def _print_link_guidance(display: ProgressDisplay, link) -> None:
+    """分享链接模式的操作引导。"""
+    display.print_info(
+        f"已识别视频号分享链接（id: {link.share_id}）。"
+        "请在**本机微信**里打开该链接（任意聊天窗口发送后点击，或浏览器打开后"
+        "选择「在微信中打开」）——预览页会在微信内置浏览器里加载，工具自动捕获"
+        "并下载该视频。"
+    )
+    display.print_info(f"链接地址：{link.original}")
+
+
+def _try_open_link(url: str) -> None:
+    """尝试用系统默认方式打开链接（可能唤起微信；失败不影响会话）。"""
+    import subprocess
+    import sys
+
+    try:
+        if sys.platform == "win32":
+            # start 是 cmd 内建命令；经 cmd /c 调用，URL 带 & 需整体引号传。
+            subprocess.Popen(
+                ["cmd", "/c", "start", "", url],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        else:
+            subprocess.Popen(
+                ["xdg-open", url],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+    except Exception as exc:  # noqa: BLE001 —— 打不开不影响手动打开
+        logger.info("自动打开链接失败（请手动在微信中打开）: %s", exc)
+
+
+async def run_channels_link_session(
+    config: ConfigLoader, link, *, port: Optional[int] = None
+) -> None:
+    """``--channels-link`` 入口：分享链接下载会话。"""
+    await run_channels_session(config, port=port, link=link)

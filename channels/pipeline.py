@@ -29,7 +29,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from channels.diagnostics import ChannelsDiagnostics
-from channels.feed import ChannelFeed, extract_feeds
+from channels.feed import ChannelFeed, extract_feeds, extract_preview_feeds
 from channels.feed_store import FeedStore
 
 __all__ = [
@@ -116,6 +116,10 @@ class FeedCapturePipeline:
     ) -> List[ChannelFeed]:
         try:
             feeds = extract_feeds(nodes, source_api=source_api)
+            if not feeds:
+                # 分享链接预览页（finder-preview）的 sceneInfo 模式：
+                # 特征是 videoUrl / picInfo 而不是 objectDesc。
+                feeds = extract_preview_feeds(nodes, source_api=source_api)
         except Exception as exc:  # noqa: BLE001 —— 单策略失败不影响其它策略
             if self.diagnostics is not None:
                 self.diagnostics.record_parse_error(f"{strategy}: {exc}")

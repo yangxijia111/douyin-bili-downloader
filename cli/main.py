@@ -624,6 +624,19 @@ async def main_async(args):
         await run_channels_session(config, port=args.channels_port)
         return
 
+    if args.channels_link:
+        from channels.share_link import parse_share_link
+        from cli.channels_session import run_channels_link_session
+
+        link = parse_share_link(args.channels_link)
+        if link is None:
+            print(f"无法识别为视频号分享链接：{args.channels_link}")
+            print("支持形态：https://weixin.qq.com/sph/<id> 或 "
+                  "https://channels.weixin.qq.com/finder-preview/pages/sph?id=<id>")
+            return
+        await run_channels_link_session(config, link, port=args.channels_port)
+        return
+
     if args.url:
         urls = args.url if isinstance(args.url, list) else [args.url]
         for url in urls:
@@ -915,6 +928,14 @@ def main():
         help="视频号嗅探代理端口（默认取 channels.proxy_port 配置，8899）",
     )
     parser.add_argument(
+        "--channels-link",
+        type=str,
+        default=None,
+        metavar="URL",
+        help="视频号分享链接下载：粘贴微信「分享→复制链接」得到的链接"
+        "（weixin.qq.com/sph/<id>），启动嗅探并引导在微信中打开，自动下载该视频",
+    )
+    parser.add_argument(
         "--channels-uninstall-ca",
         action="store_true",
         help="卸载视频号嗅探根证书（只删除当前用户 Root 存储中本机 CA 指纹的那张）",
@@ -927,7 +948,7 @@ def main():
     try:
         from __init__ import __version__
     except ImportError:
-        __version__ = "2.0.1"
+        __version__ = "2.0.3"
     parser.add_argument("--version", action="version", version=__version__)
 
     args = parser.parse_args()

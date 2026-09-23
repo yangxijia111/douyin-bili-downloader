@@ -425,6 +425,7 @@ class SnifferAddon:
         if not body or len(body) > self.MAX_BODY_BYTES:
             return
         self.diagnostics.incr("candidate_responses")
+        self.diagnostics.record_candidate_path(request.path)
 
         import json
 
@@ -436,7 +437,10 @@ class SnifferAddon:
                 content_type = (headers.get("content-type") or "").lower()
             except Exception:  # noqa: BLE001 —— 头部读取异常按无类型处理
                 content_type = ""
-        if "json" in content_type or "objectDesc" in body:
+        # 数据标记：objectDesc（普通页）或 videoUrl（分享链接预览页的
+        # sceneInfo 模式，见 channels.feed.extract_preview_feeds）。
+        has_feed_marker = "objectDesc" in body or "videoUrl" in body
+        if "json" in content_type or has_feed_marker:
             try:
                 payload = json.loads(body)
             except json.JSONDecodeError:
@@ -444,9 +448,10 @@ class SnifferAddon:
             self.diagnostics.incr("json_responses")
         if payload is None:
             return
-        if "objectDesc" not in body:
+        if not has_feed_marker:
             return
-        self.diagnostics.incr("object_desc_responses")
+        if "objectDesc" in body:
+            self.diagnostics.incr("object_desc_responses")
         fresh = self.pipeline.ingest_passive(payload, source_api=request.path)
         if fresh:
             logger.info(
@@ -548,6 +553,7 @@ class ChannelsInterceptor:
             allowed_suffixes=self.allowed_suffixes,
         )
         master = DumpMaster(opts, with_termlog=False, with_dumper=False)
+        self._drop_errorcheck(master)
         from channels.injector import InjectorAddon
         from channels.virtual_host import VirtualHostAddon
 
@@ -582,6 +588,45 @@ class ChannelsInterceptor:
             await self.stop()
             raise
         logger.info("嗅探代理已启动 %s:%d", self.host, self.port)
+
+    @staticmethod
+    def _drop_errorcheck(master) -> None:
+        """移除 mitmproxy 的 ErrorCheck 插件（嵌入场景必需）。
+
+        ErrorCheck 在「生命周期内出现过任何 ERROR 级日志」时于关闭时
+        ``sys.exit(1)``。独立 CLI 里这是合理的快速失败；但本项目的
+        mitmproxy 与 FastAPI / CLI 主循环**共享同一个事件循环**——真实
+        会话里数千条连接（微信 + 其它应用的系统级代理流量）难免有 TLS /
+        连接级 error 日志，一旦触发，SystemExit 会从 master.run() 任务
+        溢出并炸掉整个宿主进程（2026-09-23 Windows 真机实测：会话 stop
+        后服务进程随之死亡，再次 start 500）。代理自身的错误已由各
+        addon 的 try/except 与诊断计数器覆盖，不需要进程级快速失败。
+        """
+        try:
+            addons = master.addons
+            # mitmproxy 10–12：按名查找（AddonManager 不可迭代，只能
+            # 走 lookup / get；旧版没有 get 时退回遍历 chain）。
+            target = None
+            getter = getattr(addons, "get", None)
+            if callable(getter):
+                target = getter("errorcheck")
+            if target is None:
+                chain = getattr(addons, "chain", None) or []
+                for addon in chain:
+                    if type(addon).__name__ == "ErrorCheck":
+                        target = addon
+                        break
+            if target is None:
+                return
+            addons.remove(target)
+            finish = getattr(target, "finish", None)
+            if callable(finish):
+                try:
+                    finish()  # 卸载其 logging handler
+                except Exception:  # noqa: BLE001 —— 卸载失败不影响移除
+                    pass
+        except Exception as exc:  # noqa: BLE001 —— 插件 API 变化不影响启动
+            logger.warning("移除 mitmproxy ErrorCheck 插件失败（不影响嗅探）: %s", exc)
 
     async def _wait_listening(self, timeout: float = 10.0) -> None:
         loop = asyncio.get_running_loop()

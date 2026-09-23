@@ -504,6 +504,51 @@
   // 对外 API（页面模块使用）
   // ------------------------------------------------------------------
 
+  /**
+   * 运行时探针（真机诊断用，随心跳回传）。
+   * 当 Feed 长期捕获不到时，这份数据能直接回答：
+   *   - 页面里到底有哪些 finder/feed 相关全局对象（hook 目标是否存在）
+   *   - 我们的 hook 装上了没有
+   *   - 本地索引里积累了多少节点（页面侧看到了多少数据）
+   * 只回传**属性名与计数**，不回传任何用户数据。
+   */
+  function collectProbe() {
+    var probe = {
+      hooked: Object.keys(state.runtimeHooked),
+      fetch_hooked: !!(window.fetch && window.fetch.__cuinHooked),
+      xhr_hooked: !!(window.XMLHttpRequest && window.XMLHttpRequest.prototype.__cuinHooked),
+      index_size: state.index.length,
+      view_size: state.viewOrder.length,
+      window_keys: [],
+      video: null,
+    };
+    try {
+      var keys = Object.getOwnPropertyNames(window);
+      var re = /finder|feed|channel|live|object|snss?/i;
+      for (var i = 0; i < keys.length && probe.window_keys.length < 60; i++) {
+        if (re.test(keys[i])) probe.window_keys.push(keys[i]);
+      }
+    } catch (e) { /* ignore */ }
+    try {
+      var v = document.querySelector("video");
+      if (v) {
+        probe.video = {
+          src: (v.currentSrc || v.src || "").slice(0, 600),
+          outer: (v.outerHTML || "").slice(0, 600),
+          parent_attrs: {},
+        };
+        var parent = v.parentElement;
+        if (parent && parent.attributes) {
+          for (var k = 0; k < parent.attributes.length; k++) {
+            var pa = parent.attributes[k];
+            probe.video.parent_attrs[pa.name] = String(pa.value).slice(0, 200);
+          }
+        }
+      }
+    } catch (e) { /* ignore */ }
+    return probe;
+  }
+
   var api = {
     version: state.version,
     state: state,
@@ -590,6 +635,7 @@
         page: state.page,
         url: location.pathname,
         buttons: state.buttons,
+        probe: collectProbe(),
       });
     }, HEARTBEAT_INTERVAL);
 

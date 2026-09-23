@@ -348,6 +348,14 @@ class ChannelsDownloader:
             head = await fh.read(64)
         if not is_mp4_header(head):
             part.unlink(missing_ok=True)
+            if feed.decode_key is None:
+                # 分享链接预览页（finder-preview）不下发 decodeKey；拿到手的
+                # 直链大概率仍是加密流。给出可操作的指引而不是笼统失败。
+                raise ChannelsDownloadError(
+                    "预览页直链未下发解密密钥（decodeKey），视频仍为加密流："
+                    "请改用微信内播放 + 页面按钮/嗅探列表下载（该路径可取得 "
+                    "decodeKey）"
+                )
             raise ChannelsDownloadError(
                 "解密校验失败：文件头不是合法 MP4（decodeKey 与文件不匹配）"
             )

@@ -271,6 +271,8 @@
   /** 页面类型识别（与 Python CHANNELS_PAGE_PATH_RE 覆盖范围一致）。 */
   function detectPageType(pathname) {
     var path = String(pathname || "");
+    // 分享链接预览页（finder-preview）按详情页处理。
+    if (/\/finder-preview\/pages\//i.test(path)) return "feed";
     var match = path.match(/\/web\/pages\/(home|feed|live|profile)/i);
     return match ? match[1].toLowerCase() : "";
   }

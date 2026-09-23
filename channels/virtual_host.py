@@ -285,10 +285,12 @@ class VirtualHostAddon:
         page = body.get("page")
         page_url = body.get("url")
         buttons = body.get("buttons")
+        probe = body.get("probe")
         self.diagnostics.record_heartbeat(
             page_type=page if isinstance(page, str) else "",
             page_url=page_url if isinstance(page_url, str) else "",
             buttons_created=buttons if isinstance(buttons, int) else 0,
+            probe=probe if isinstance(probe, dict) else None,
         )
         self._respond(flow, 200, {"ok": True})
 

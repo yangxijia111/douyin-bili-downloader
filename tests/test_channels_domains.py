@@ -152,3 +152,66 @@ class TestInterceptorWiring:
         assert len(store) == 1
         addon.response(self._make_flow("channels.weixin.qq.com", body))
         assert len(store) == 1  # 自定义后缀替换而非叠加默认（扩展须显式 merge）
+
+    def test_errorcheck_addon_dropped_for_embedded_run(self):
+        """嵌入场景必须移除 ErrorCheck（真机实测：它在会话期出现任何
+        ERROR 日志时于关闭时 sys.exit(1)，会炸掉共享事件循环的宿主
+        进程——2026-09-23 Windows 真机验收发现，曾导致 stop 后服务端
+        死亡、再次 start 500）。"""
+        pytest.importorskip("mitmproxy")
+        import asyncio
+
+        from channels.interceptor import ChannelsInterceptor
+
+        async def _run():
+            from mitmproxy import options
+            from mitmproxy.tools.dump import DumpMaster
+
+            opts = options.Options(
+                listen_host="127.0.0.1", listen_port=18998, confdir="."
+            )
+            master = DumpMaster(opts, with_termlog=False, with_dumper=False)
+            assert master.addons.get("errorcheck") is not None, "前置条件不成立"
+            ChannelsInterceptor._drop_errorcheck(master)
+            assert master.addons.get("errorcheck") is None, "ErrorCheck 未被移除"
+            assert len(master.addons) > 0, "不能把其它 addon 一起删掉"
+
+        asyncio.run(_run())
+
+    def test_errorcheck_drop_handles_legacy_chain_api(self):
+        """旧版 AddonManager 没有 get() 时退回遍历 chain。"""
+        pytest.importorskip("mitmproxy")
+        from types import SimpleNamespace
+
+        from channels.interceptor import ChannelsInterceptor
+
+        class ErrorCheck:
+            pass
+
+        class _LegacyAddons:
+            def __init__(self):
+                self.chain = [ErrorCheck(), object()]
+
+            def remove(self, addon):
+                self.chain = [a for a in self.chain if a is not addon]
+
+        addons = _LegacyAddons()
+        ChannelsInterceptor._drop_errorcheck(SimpleNamespace(addons=addons))
+        assert not any(
+            type(a).__name__ == "ErrorCheck" for a in addons.chain
+        )
+        assert len(addons.chain) == 1
+
+    def test_errorcheck_drop_noop_when_absent(self):
+        """没有 errorcheck 时静默跳过（不抛异常）。"""
+        from types import SimpleNamespace
+
+        from channels.interceptor import ChannelsInterceptor
+
+        class _EmptyAddons:
+            def get(self, name):
+                return None
+
+            chain = []
+
+        ChannelsInterceptor._drop_errorcheck(SimpleNamespace(addons=_EmptyAddons()))

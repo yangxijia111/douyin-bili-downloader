@@ -68,7 +68,7 @@ logger = setup_logger("REST")
 try:  # 版本号在项目根的 __init__.py 里，缺失时退默认值
     from __init__ import __version__ as _VERSION
 except ImportError:  # pragma: no cover - 打包/独立运行场景
-    _VERSION = "2.0.2"
+    _VERSION = "2.0.3"
 
 # 网页控制台根目录（项目根 /web）
 _WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
@@ -1280,6 +1280,36 @@ def build_app(config: ConfigLoader) -> FastAPI:
     async def channels_network_repair() -> Dict[str, Any]:
         """恢复上次异常退出残留的系统代理（幂等；不动用户手动改过的设置）。"""
         return channels_sessions.repair_network()
+
+    @app.post("/api/v1/channels/link/parse")
+    async def channels_link_parse(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+        """解析视频号分享链接（不启动会话；返回识别结果供前端确认）。"""
+        url = body.get("url")
+        if not isinstance(url, str) or not url.strip():
+            raise HTTPException(status_code=400, detail="url (str) is required")
+        try:
+            return channels_sessions.parse_link(url)
+        except ChannelsSessionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/v1/channels/link")
+    async def channels_link_start(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+        """分享链接下载：识别链接并按需启动嗅探会话（强制自动下载）。
+
+        用户随后在微信里打开该链接；预览页数据经注入脚本捕获后自动下载。
+        """
+        url = body.get("url")
+        if not isinstance(url, str) or not url.strip():
+            raise HTTPException(status_code=400, detail="url (str) is required")
+        try:
+            return await channels_sessions.start_link_session(url)
+        except ChannelsSessionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/api/v1/channels/link")
+    async def channels_link_clear() -> Dict[str, Any]:
+        """清除待处理的分享链接（停止链接模式引导）。"""
+        return channels_sessions.clear_link()
 
     return app
 

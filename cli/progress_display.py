@@ -35,9 +35,13 @@ class ProgressDisplay:
         self._item_stats = {"success": 0, "failed": 0, "skipped": 0}
 
     def show_banner(self):
-        banner = """
+        try:
+            from __init__ import __version__
+        except ImportError:  # pragma: no cover - 打包/独立运行场景
+            __version__ = "dev"
+        banner = f"""
 ╔══════════════════════════════════════════╗
-║     Video Batch Downloader v2.0.1        ║
+║     Video Batch Downloader v{__version__:<12}║
 ║     抖音 / 哔哩哔哩 / 多平台 批量下载工具 ║
 ╚══════════════════════════════════════════╝
         """
