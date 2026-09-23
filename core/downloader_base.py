@@ -1,3 +1,7 @@
+# Python 3.9 兼容：函数/类体内 ``bool | Path`` 等新式联合标注在 3.9 会在
+# 类创建时求值并抛 TypeError（CI py3.9 矩阵实测），future import 使其惰性化。
+from __future__ import annotations
+
 import asyncio
 import json
 import re

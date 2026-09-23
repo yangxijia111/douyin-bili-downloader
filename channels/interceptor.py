@@ -310,10 +310,6 @@ class SystemProxyManager:
     def _write(self, values: dict) -> None:
         self._backend.write(values)
 
-    @staticmethod
-    def _notify_wininet() -> None:
-        WindowsProxyBackend.notify()
-
     # -- 对外接口 ------------------------------------------------------------
 
     def enable(self, host: str = "127.0.0.1", port: int = 8899) -> None:
@@ -332,7 +328,8 @@ class SystemProxyManager:
                 "ProxyOverride": self._DEFAULT_OVERRIDE,
             }
         )
-        self._notify_wininet()
+        # 通知经注入的后端发出（测试替身可拦截，真实后端调 WinINET）。
+        self._backend.notify()
         # 落盘崩溃恢复记录：到此为止若进程被强杀，下次启动可还原。
         self._recovery.save(previous=self._backup, proxy=f"{host}:{port}")
         logger.info("系统代理已开启 -> %s:%d", host, port)
@@ -344,7 +341,7 @@ class SystemProxyManager:
         backup, self._backup = self._backup, None
         try:
             self._write(backup)
-            self._notify_wininet()
+            self._backend.notify()
             self._recovery.clear()
             logger.info("系统代理已还原")
         except OSError as exc:  # pragma: no cover - 注册表异常兜底

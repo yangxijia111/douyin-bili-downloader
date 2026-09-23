@@ -1,5 +1,8 @@
 """热榜 / 搜索落盘模块测试。"""
 
+# Python 3.9 兼容：参数标注 ``List[...] | None`` 在 3.9 会立即求值。
+from __future__ import annotations
+
 import json
 from pathlib import Path
 from typing import Any, Dict, List
