@@ -54,10 +54,17 @@ class ChannelsSessionManager:
     def __init__(self, config: ConfigLoader, file_manager: FileManager):
         self.config = config
         self.file_manager = file_manager
-        self._lock = asyncio.Lock()
+        # 惰性锁（py<=3.10 构造期急切绑定事件循环，见 control/queue_manager）。
+        self._lock: Optional[asyncio.Lock] = None
         self._running: Optional[Dict[str, Any]] = None
         self._manual_tasks: Set[asyncio.Task] = set()
         self._cert_manager = CertificateManager()
+
+    @property
+    def _start_lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
 
     # ------------------------------------------------------------------
     # 状态查询
@@ -173,7 +180,7 @@ class ChannelsSessionManager:
         auto_download: Optional[bool] = None,
         database: Optional[Database] = None,
     ) -> Dict[str, Any]:
-        async with self._lock:
+        async with self._start_lock:
             if self._running is not None:
                 return self.status()
             if not mitmproxy_available():
@@ -262,7 +269,7 @@ class ChannelsSessionManager:
             return self.status()
 
     async def stop(self) -> Dict[str, Any]:
-        async with self._lock:
+        async with self._start_lock:
             holder, self._running = self._running, None
         if holder is None:
             return self.status()

@@ -1,6 +1,7 @@
 import asyncio
 import random
 import time
+from typing import Optional
 
 
 class RateLimiter:
@@ -10,10 +11,18 @@ class RateLimiter:
         self.max_per_second = max_per_second
         self.min_interval = 1.0 / max_per_second
         self.last_request = 0.0
-        self._lock = asyncio.Lock()
+        # 惰性锁（同 queue_manager.semaphore 约定）：避免 py<=3.10 的
+        # 构造期事件循环绑定。
+        self._lock: Optional[asyncio.Lock] = None
+
+    @property
+    def lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
 
     async def acquire(self):
-        async with self._lock:
+        async with self.lock:
             current = time.time()
             time_since_last = current - self.last_request
 

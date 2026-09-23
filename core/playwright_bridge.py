@@ -108,11 +108,18 @@ class PlaywrightPageBridge:
         self._proxy = str(proxy or "").strip()
         self._headless = headless
         self._request_timeout = request_timeout_seconds
-        self._lock = asyncio.Lock()
+        # 惰性锁（py<=3.10 构造期急切绑定事件循环，见 control/queue_manager）。
+        self._lock: Optional[asyncio.Lock] = None
         self._playwright = None
         self._browser = None
         self._context = None
         self._page = None
+
+    @property
+    def bridge_lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
 
     async def fetch(
         self,
@@ -182,12 +189,12 @@ class PlaywrightPageBridge:
         return outcome
 
     async def aclose(self) -> None:
-        async with self._lock:
+        async with self.bridge_lock:
             await self._teardown()
 
     async def _recycle(self) -> None:
         """页面失去响应或崩溃时回收浏览器；下一次 fetch 会重新拉起。"""
-        async with self._lock:
+        async with self.bridge_lock:
             await self._teardown()
 
     async def _teardown(self) -> None:
@@ -215,7 +222,7 @@ class PlaywrightPageBridge:
     async def _ensure_page(self):
         if self._page is not None and not self._page.is_closed():
             return self._page
-        async with self._lock:
+        async with self.bridge_lock:
             if self._page is not None and not self._page.is_closed():
                 return self._page
             try:

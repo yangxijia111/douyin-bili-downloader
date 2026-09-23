@@ -171,10 +171,25 @@ class JobManager:
     ):
         self.executor = executor
         self._jobs: Dict[str, DownloadJob] = {}
-        self._semaphore = asyncio.Semaphore(max(1, max_concurrency))
-        self._lock = asyncio.Lock()
+        # 惰性原语：py<=3.10 构造期急切绑定事件循环，asyncio.run 之后再
+        # 构造会直接 RuntimeError（CI py3.9 实测）。首次使用时再创建。
+        self._semaphore: Optional[asyncio.Semaphore] = None
+        self._lock: Optional[asyncio.Lock] = None
+        self._max_concurrency = max(1, int(max_concurrency))
         self.max_jobs = max(1, int(max_jobs))
         self.job_ttl_seconds = max(0.0, float(job_ttl_seconds))
+
+    @property
+    def _sem(self) -> asyncio.Semaphore:
+        if self._semaphore is None:
+            self._semaphore = asyncio.Semaphore(self._max_concurrency)
+        return self._semaphore
+
+    @property
+    def sync_lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
 
     async def submit(
         self, url: str, *, overrides: Optional[Dict[str, Any]] = None
@@ -182,7 +197,7 @@ class JobManager:
         job_id = uuid.uuid4().hex[:12]
         job = DownloadJob(job_id=job_id, url=url)
         job.overrides = overrides or None
-        async with self._lock:
+        async with self.sync_lock:
             self._prune_locked()
             self._jobs[job_id] = job
         # 异步调度，立即返回 job 给调用方
@@ -221,7 +236,7 @@ class JobManager:
     async def _run(self, job: DownloadJob) -> None:
         token = CURRENT_JOB.set(job)
         try:
-            async with self._semaphore:
+            async with self._sem:
                 job.status = JobStatus.RUNNING
                 job.started_at = _now_iso()
                 job.started_monotonic = time.monotonic()
@@ -263,11 +278,11 @@ class JobManager:
             CURRENT_JOB.reset(token)
 
     async def get(self, job_id: str) -> Optional[DownloadJob]:
-        async with self._lock:
+        async with self.sync_lock:
             return self._jobs.get(job_id)
 
     async def list_jobs(self) -> List[DownloadJob]:
-        async with self._lock:
+        async with self.sync_lock:
             return list(self._jobs.values())
 
     def set_max_concurrency(self, value: int) -> None:
@@ -276,11 +291,14 @@ class JobManager:
         Existing in-flight jobs keep their slot until they finish; only the
         number of *new* jobs allowed to start in parallel changes.
         """
-        self._semaphore = asyncio.Semaphore(max(1, int(value)))
+        # 置空让下一次使用按新并发数重建（set_max_concurrency 本身可能运行
+        # 在无事件循环的同步上下文里）。
+        self._semaphore = None
+        self._max_concurrency = max(1, int(value))
 
     async def cancel(self, job_id: str) -> Optional[DownloadJob]:
         """Stop a queued or running job. Returns the job, or None if unknown."""
-        async with self._lock:
+        async with self.sync_lock:
             job = self._jobs.get(job_id)
         if job is None:
             return None
@@ -316,7 +334,7 @@ class JobManager:
         job = await self.cancel(job_id)
         if job is None:
             return False
-        async with self._lock:
+        async with self.sync_lock:
             self._jobs.pop(job_id, None)
         return True
 
@@ -330,7 +348,7 @@ class JobManager:
             for job in await self.list_jobs():
                 if job.status not in JobStatus.TERMINAL:
                     await self.cancel(job.job_id)
-        async with self._lock:
+        async with self.sync_lock:
             targets = (
                 list(self._jobs) if include_active
                 else [jid for jid, j in self._jobs.items() if j.status in JobStatus.TERMINAL]
@@ -346,7 +364,7 @@ class JobManager:
         在「当前作品下载完之后、下一次请求之前」生效——对作者主页这类批量
         任务就是逐条暂停。
         """
-        async with self._lock:
+        async with self.sync_lock:
             job = self._jobs.get(job_id)
         if job is None:
             return None
