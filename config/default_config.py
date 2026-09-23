@@ -229,8 +229,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "channels": {
         # 嗅探开关（URL 直链下载不受此影响；视频号链接本身不支持直链）。
         "enabled": True,
-        # 捕获到新视频后是否自动下载；False 时只进入列表，手动挑选下载。
-        "auto_download": True,
+        # 捕获到新视频后是否自动下载。v2.0.2 起默认 False：微信页面按钮
+        # 模式下「刷视频只捕获、点按钮才下载」才是合理语义——避免用户刷
+        # 十几个视频就全部自动保存。仍可在网页控制台 / 配置里手动开启。
+        "auto_download": False,
+        # 是否向微信视频号页面注入下载按钮（bootstrap + 虚拟资源）。
+        # False 时退化为 v2.0.1 的纯被动嗅探（无页面 UI）。
+        "inject_ui": True,
+        # Strategy D：拦截 res.wx.qq.com 的 JS bundle 并应用兼容补丁。
+        # 默认 False（当前无已登记补丁）；开启需同时在 intercept_domains
+        # 增加 res.wx.qq.com，且仅在有真机证据时使用。
+        "patch_js_bundles": False,
         # 画质偏好：highest / lowest / 1080p / 720p / 480p …（匹配不到自动回退）。
         "quality": "highest",
         # 本机嗅探代理端口（默认避开 wx_channels_download 的 2022）。

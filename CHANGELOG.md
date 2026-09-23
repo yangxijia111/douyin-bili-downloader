@@ -3,6 +3,70 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.2] - 2026-09-23
+
+视频号运行时捕获与页面内下载版本。修复 Windows 真机「嗅探会话正常但始终
+捕获不到视频」的 P0 缺陷：页面注入成为主要捕获方案，微信页面内直接出现
+可视化下载按钮；被动嗅探保留为兜底。新增链路诊断、四策略捕获流水线与
+前端单测。**真机验收清单见 `docs/testing/channels-windows-smoke.md`——
+本版本是否正式发布以 Windows 微信真机验收为准。**
+
+### 修复（Fixed）
+
+- **视频号无法捕获（P0）**：根因是 v2.0.1 唯一捕获路径（mitmproxy 被动
+  响应 → body 含 `objectDesc` → `json.loads`）无法覆盖真实微信链路——
+  页面数据可能只存在于前端运行时对象、或落在未解密域，且链路完全不可
+  观测。v2.0.2 以页面注入为主策略：向 `channels.weixin.qq.com/web/pages/
+  {home,feed,live,profile}` 注入 bootstrap，hook `fetch` / `XMLHttpRequest`
+  与 finder 运行时函数，经同源虚拟接口 `/__cuin/feed` 回传 Python 侧。
+- **诊断替代「暂无嗅探结果」**：新增 `channels/diagnostics.py`（11 个规范
+  计数器 + 九级状态链 + A–F 分级诊断）。CLI 会话与 Web 控制台实时显示
+  「代理连接 → 目标域命中 → HTML 拦截 → 脚本注入 → 前端心跳 → 页面按钮
+  → Feed 获取 → 下载成功」，第一个 ✗ 即断点并附处置建议。
+
+### 新增（Added）
+
+- **微信页面内下载按钮**（`channels/inject/`，独立实现，不复制
+  wx_channels_download 源码）：首页推荐流（对应当前播放视频，切换自动
+  跟随）、详情页/作者主页（优先微信现有操作栏）、直播页（开始/停止录制）。
+  选择器链 primary → fallback → 悬浮按钮，MutationObserver 处理 DOM 复用，
+  `data-cuin-btn` 保证幂等。菜单按 feed 能力动态生成（下载 / 最高画质 /
+  最低画质 / 封面）；未识别当前视频时给出引导提示，绝不无反应。
+- **同源虚拟接口**（`channels/virtual_host.py`）：`/__cuin/assets/*` 虚拟
+  静态资源、`/__cuin/feed` Feed 桥接、`/__cuin/heartbeat` 前端心跳、
+  `/__cuin/task` 下载/录制任务与状态轮询。全部由 mitmproxy 本地响应、
+  **永不转发腾讯服务器**；严格校验 body 大小 / Content-Type / 同源
+  Origin/Referer / schema；非 `/__cuin/*` 请求零影响。
+- **四策略捕获流水线**（`channels/pipeline.py`）：A 被动响应 / B 页面
+  网络 hook / C 页面运行时 hook / D 兼容补丁，统一进 `FeedStore`，按策略
+  统计供数占比。
+- **Strategy D 补丁框架**（`channels/patches.py`）：特征检测命中才应用、
+  失败自动 passthrough、命中/失败记诊断。**默认不登记任何补丁**——仅当
+  真机证明 B/C 不稳定时按微信版本登记（附 regression fixture）。
+- **页面按钮任务中心**（`channels/task_hub.py`）：复用 ChannelsDownloader /
+  FeedStore / DownloadResult，任务状态轮询、直播录制取消（ffmpeg 优雅
+  终止并保留部分文件）。
+- **HTML 注入正确性**（`channels/injector.py`）：gzip/br 透明（解码 →
+  改写 → 按原编码重编码并修正 Content-Length）、CSP 头与 meta 双形式
+  放宽（补 `'self'`、复制 nonce，不引入 `'unsafe-inline'`）、幂等标记、
+  任何失败原样放行。
+- **前端单测**（`tests/frontend/`，`node --test`）：hook 语义保持
+  （fetch 返回值完全不变 / XHR 行为不变 / hook 异常不影响微信）、
+  objectDesc 收集、当前视频匹配、按钮模型。CI channels-server 矩阵新增
+  该步骤。
+
+### 变更（Changed）
+
+- **`channels.auto_download` 默认改为 `false`**：页面按钮模式下「刷视频
+  只捕获、点按钮才下载」才是合理语义，避免刷十几个视频全部自动保存；
+  用户可在配置或网页控制台手动开启。
+- 新增配置 `channels.inject_ui`（默认 true，false 退化为纯被动嗅探）与
+  `channels.patch_js_bundles`（默认 false，Strategy D 开关）。
+- Web 控制台「视频号」页新增「嗅探链路诊断」卡片（状态链 + 处置建议 +
+  策略分布），捕获列表空态改为链路诊断提示。
+- `/api/v1/channels/status` 增加 `diagnostics` 负载，`/feeds` 增加
+  `strategy_stats`。
+
 ## [2.0.1] - 2026-09-23
 
 安全与可靠性加固版本：视频号 MITM 最小权限、REST 认证边界、证书生命周期、

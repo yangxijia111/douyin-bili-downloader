@@ -61,6 +61,11 @@ jobs:
       # test_proxy_validator_parity）。测试全程 mock 系统状态。
       - name: Full tests (floating versions)
         run: pytest -q
+      # 视频号页面注入包的前端单测（hook 语义保持 / objectDesc 收集 /
+      # 按钮模型 / 运行时包装）。bash 保证 glob 在 Windows runner 上也展开。
+      - name: Frontend tests (node --test)
+        shell: bash
+        run: node --test tests/frontend/*.test.js
       - name: Package smoke (all modules)
         run: python scripts/ci_smoke.py
 

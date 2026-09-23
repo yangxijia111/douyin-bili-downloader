@@ -136,6 +136,17 @@ tbody tr:hover{background:var(--bg3)}
 
 
 .empty{text-align:center;color:var(--dim);padding:34px 10px;font-size:13px}
+/* 视频号嗅探链路诊断状态链 */
+.ch-chain{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
+.ch-step{display:flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--border);
+  border-radius:999px;font-size:12px;background:var(--bg2);color:var(--muted)}
+.ch-step .ch-mark{font-weight:700;width:14px;text-align:center}
+.ch-step .ch-value{font-family:var(--mono);font-size:11px;color:var(--dim)}
+.ch-step.ok{color:var(--ok);border-color:rgba(63,185,80,.45)}
+.ch-step.ok .ch-mark{color:var(--ok)}
+.ch-step.bad{color:var(--err);border-color:rgba(248,81,73,.55);background:rgba(248,81,73,.08)}
+.ch-step.bad .ch-mark{color:var(--err)}
+.ch-step.off{opacity:.55}
 .toasts{position:fixed;right:18px;bottom:18px;display:flex;flex-direction:column;gap:8px;z-index:99}
 .toast{background:var(--bg4);border:1px solid var(--border2);border-left:3px solid var(--accent);
   border-radius:8px;padding:10px 14px;font-size:13px;max-width:380px;box-shadow:0 6px 22px rgba(0,0,0,.45)}
@@ -321,7 +332,7 @@ tbody tr:hover{background:var(--bg3)}
       <section class="panel" id="panel-channels">
         <div class="card">
           <h3>视频号嗅探会话</h3>
-          <p class="hint">视频号没有免登录网页版：启动嗅探后，工具接管系统代理，被动读取本机微信「视频号」流量中的视频直链与解密密钥——在本机微信里打开视频号刷视频即可自动捕获下载（结束会话自动还原系统代理）。依赖 mitmproxy（pip install ".[channels]"）。</p>
+          <p class="hint">视频号没有免登录网页版：启动嗅探后，工具接管系统代理，向视频号页面注入下载按钮，并被动读取微信内嵌浏览器流量中的视频直链与解密密钥——在微信里打开视频号刷视频，点页面里的「下载」按钮即可保存（结束会话自动还原系统代理）。依赖 mitmproxy（pip install ".[channels]"）。</p>
           <div class="row" style="align-items:center;gap:10px;flex-wrap:wrap">
             <span class="dot" id="chDot"></span>
             <span id="chStateText" style="font-size:12.5px">未启动</span>
@@ -342,6 +353,11 @@ tbody tr:hover{background:var(--bg3)}
             <span id="chStatsText" style="font-size:12.5px;color:var(--muted);margin-left:auto"></span>
           </div>
           <p class="hint" id="chHint" style="margin-top:8px"></p>
+        </div>
+        <div class="card">
+          <h3>嗅探链路诊断 <span id="chStageText" style="color:var(--muted);font-weight:400;font-size:12px"></span></h3>
+          <div id="chChain" class="ch-chain"></div>
+          <p class="hint" id="chAdvice" style="margin-top:8px"></p>
         </div>
         <div class="card">
           <h3>捕获列表 <span id="chFeedCount" style="color:var(--muted);font-weight:400;font-size:12px"></span></h3>
@@ -1362,9 +1378,9 @@ async function loadChannelsStatus() {
   } else if (!certOk) {
     hint.textContent = "首次使用需先「安装证书」——点击后服务器会弹出 Windows 确认框，请点「是」。证书仅在本机生成（~/.mitmproxy），用于解密本机微信视频流量。";
   } else if (!s.running) {
-    hint.textContent = "证书就绪。点击「启动嗅探」后，在本机微信里打开视频号刷视频即可捕获。";
+    hint.textContent = "证书就绪。点击「启动嗅探」后，在本机微信里打开视频号，页面中会出现「下载」按钮。";
   } else {
-    hint.textContent = "正在嗅探。在本机微信里打开视频号播放视频即可；停止会话时系统代理自动还原。";
+    hint.textContent = "正在嗅探。在本机微信里打开视频号播放视频，点页面里的「下载」按钮即可保存；停止会话时系统代理自动还原。";
   }
   if (s.stats) {
     document.getElementById("chStatsText").textContent =
@@ -1372,6 +1388,39 @@ async function loadChannelsStatus() {
   } else {
     document.getElementById("chStatsText").textContent = "";
   }
+  chRenderDiagnostics(s);
+}
+
+/** 渲染嗅探链路诊断状态链（替代笼统的「暂无嗅探结果」）。 */
+function chRenderDiagnostics(s) {
+  const d = s.diagnostics;
+  const chainBox = document.getElementById("chChain");
+  const adviceBox = document.getElementById("chAdvice");
+  const stageText = document.getElementById("chStageText");
+  if (!d) {
+    chainBox.innerHTML = "";
+    adviceBox.textContent = "";
+    stageText.textContent = "";
+    return;
+  }
+  const steps = d.chain || [];
+  chainBox.innerHTML = steps.map(function (step) {
+    const cls = step.ok ? "ok" : (step.current ? "bad" : "off");
+    const mark = step.ok ? "✓" : (step.current ? "✗" : "·");
+    return '<div class="ch-step ' + cls + '" title="' + esc(step.detail) + '">' +
+      '<span class="ch-mark">' + mark + '</span>' +
+      '<span>' + esc(step.label) + '</span>' +
+      '<span class="ch-value">' + esc(String(step.value)) + '</span></div>';
+  }).join("");
+  const levelStyle = { ok: "var(--ok)", warn: "var(--warn)", error: "var(--err)" }[d.level] || "var(--muted)";
+  adviceBox.innerHTML = '<span style="color:' + levelStyle + ';font-weight:600">' + esc(d.stage_label || d.stage) + '</span> — ' + esc(d.message || "");
+  const strategy = d.strategy_stats || {};
+  const stratKeys = Object.keys(strategy);
+  stageText.textContent = s.running && stratKeys.length
+    ? "捕获策略：" + stratKeys.map(function (k) { return k + " " + strategy[k]; }).join(" / ")
+    : "";
+  // 供捕获列表空态引用（loadChannelsFeeds 与 status 轮询是两次请求）。
+  window.__chLastDiagnostics = d;
 }
 
 async function loadChannelsFeeds() {
@@ -1386,7 +1435,13 @@ async function loadChannelsFeeds() {
   document.getElementById("chFeedCount").textContent = "共 " + (d.total || 0) + " 条";
   const feeds = d.feeds || [];
   if (!feeds.length) {
-    box.innerHTML = '<div class="empty">嗅探运行中，尚未捕获内容。打开本机微信 → 视频号，播放任意视频试试。</div>';
+    // 用链路诊断给出可操作的提示，而不是笼统的「暂无嗅探结果」。
+    const diag = window.__chLastDiagnostics;
+    const advice = diag && diag.message ? diag.message : "";
+    box.innerHTML = '<div class="empty">' + esc(
+      "嗅探运行中，尚未捕获内容。请在本机微信里打开视频号并播放视频 1–2 秒。" +
+      (advice ? "\n链路诊断：" + advice : "")
+    ) + "</div>";
     return;
   }
   box.innerHTML = feeds.map(function (f) {

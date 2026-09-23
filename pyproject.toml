@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "douyin-downloader"
-version = "2.0.1"
+version = "2.0.2"
 description = "Multi-platform video batch downloader (Douyin / Bilibili / WeChat Channels / iQIYI / Tencent Video / Youku etc.) with CLI and Web console"
 readme = "README.md"
 license = {text = "MIT"}
@@ -97,6 +97,11 @@ include = [
   "tools*",
   "server*",
 ]
+
+# 视频号页面注入包的前端资源（JS / CSS 必须随 wheel 分发，
+# virtual_host 的 /__cuin/assets/* 从包内读取）。
+[tool.setuptools.package-data]
+channels = ["inject/assets/*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

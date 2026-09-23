@@ -4,11 +4,13 @@
 
     ① 检查并（首次）安装本机嗅探根证书 —— Windows 会弹确认框
     ② 启动 mitmproxy 嗅探代理 + 开启系统代理（微信内嵌浏览器走代理）
-    ③ rich 实时表格展示捕获列表；auto_download 开启时后台协程逐条下载
+    ③ rich 实时表格展示捕获列表与链路诊断；auto_download 开启时后台协程
+       逐条下载；微信页面内的下载按钮经 /__cuin/task 触发同一下载器
     ④ Ctrl+C 退出：关代理、还原系统代理、关数据库
 
-使用方式：会话启动后在本机微信里打开「视频号」刷视频，feed（直链 +
-decodeKey）随 API 响应被动落入捕获列表。
+使用方式：会话启动后在本机微信里打开「视频号」刷视频，页面里会出现
+「下载」按钮（v2.0.2 起的主要交互）；feed（直链 + decodeKey）由页面 hook
+与被动嗅探双路捕获，落入捕获列表。
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, Optional
 
+from channels.diagnostics import ChannelsDiagnostics
 from channels.feed_store import FeedStore
 from channels.interceptor import (
     MITMPROXY_INSTALL_HINT,
@@ -24,6 +27,7 @@ from channels.interceptor import (
     SystemProxyManager,
     mitmproxy_available,
 )
+from channels.patches import PatchRegistry
 from cli.progress_display import ProgressDisplay
 from config import ConfigLoader
 from core.downloader_base import DownloadResult
@@ -112,8 +116,10 @@ async def run_channels_session(config: ConfigLoader, *, port: Optional[int] = No
         return
 
     listen_port = int(port or section.get("proxy_port", 8899) or 8899)
-    auto_download = bool(section.get("auto_download", True))
+    # v2.0.2 默认仅捕获不自动下载：页面按钮模式下用户点按钮才下载。
+    auto_download = bool(section.get("auto_download", False))
     live_record = bool(section.get("live_record", False))
+    inject_ui = bool(section.get("inject_ui", True))
     # MITM 解密白名单扩展（默认只有 weixin.qq.com，见 channels.domains）。
     extra_domains = section.get("intercept_domains")
     if not isinstance(extra_domains, (list, tuple)):
@@ -128,11 +134,16 @@ async def run_channels_session(config: ConfigLoader, *, port: Optional[int] = No
     file_manager = FileManager(config.get("path"))
 
     from channels.downloader import ChannelsDownloader
+    from channels.task_hub import ChannelsTaskHub
 
     downloader = ChannelsDownloader(config, file_manager, database=database)
+    # 诊断计数器与任务中心：CLI 与 Server 形态一致（跨 stop 后仍可查看）。
+    diagnostics = ChannelsDiagnostics()
+    patch_registry = PatchRegistry(diagnostics)
+    stats = DownloadResult()
+    task_hub = ChannelsTaskHub(store, downloader, stats)
 
     proxy_manager = SystemProxyManager()
-    stats = DownloadResult()
 
     # 先处理上次异常退出可能残留的系统代理（不能覆盖用户新设置）。
     from channels.proxy_recovery import recover_stale_proxy
@@ -152,7 +163,9 @@ async def run_channels_session(config: ConfigLoader, *, port: Optional[int] = No
     try:
         interceptor = ChannelsInterceptor(
             store, port=listen_port, cert_manager=cert_manager,
-            extra_domains=extra_domains,
+            extra_domains=extra_domains, diagnostics=diagnostics,
+            task_hub=task_hub, inject_enabled=inject_ui,
+            patch_registry=patch_registry,
         )
         await interceptor.start()
         try:
@@ -175,7 +188,9 @@ async def run_channels_session(config: ConfigLoader, *, port: Optional[int] = No
                 )
             )
 
-        await _interactive_loop(display, store, stats, auto_download=auto_download)
+        await _interactive_loop(
+            display, store, stats, diagnostics=diagnostics, auto_download=auto_download
+        )
     except KeyboardInterrupt:
         pass  # 正常退出路径：Ctrl+C
     finally:
@@ -183,6 +198,9 @@ async def run_channels_session(config: ConfigLoader, *, port: Optional[int] = No
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        # 微信页面按钮的任务（含直播录制）随之取消。
+        task_hub.cancel_all()
+        await task_hub.wait_idle(timeout=5.0)
         if interceptor is not None:
             try:
                 await interceptor.stop()
@@ -209,6 +227,7 @@ async def _interactive_loop(
     store: FeedStore,
     stats: DownloadResult,
     *,
+    diagnostics: ChannelsDiagnostics,
     auto_download: bool,
 ) -> None:
     """rich Live 实时表格，Ctrl+C 打断返回。"""
@@ -255,16 +274,27 @@ async def _interactive_loop(
             )
         return table
 
+    def render_chain() -> Text:
+        """链路诊断状态链（断点一目了然，替代笼统的「暂无嗅探结果」）。"""
+        advice = diagnostics.advice()
+        style = {"ok": "green", "warn": "yellow", "error": "red"}[advice["level"]]
+        marks = {"ok": "✓", "warn": "…", "error": "✗"}
+        parts = []
+        for step in diagnostics.chain(downloads_success=stats.success):
+            mark = marks["ok"] if step["ok"] else marks[advice["level"]]
+            parts.append(f"[{style}]{mark} {step['label']}[/{style}]")
+        return Text.from_markup(" ".join(parts) + f"\n[dim]{advice['message']}[/dim]")
+
     hint = Text.from_markup(
-        "[dim]现在打开本机微信 → 视频号，浏览/播放视频即可捕获。"
-        + ("自动下载已开启。" if auto_download else "自动下载未开启（channels.auto_download=false），仅捕获列表。")
+        "[dim]现在打开本机微信 → 视频号，页面中会出现「下载」按钮；"
+        + ("自动下载已开启。" if auto_download else "自动下载未开启（channels.auto_download=false），仅捕获 + 按钮下载。")
         + " 按 Ctrl+C 结束会话。[/dim]"
     )
 
     import contextlib
 
-    with Live(Group(render_table(), hint), refresh_per_second=2) as live:
+    with Live(Group(render_table(), render_chain(), hint), refresh_per_second=2) as live:
         while True:
             with contextlib.suppress(asyncio.TimeoutError):
                 await store.wait_for_new(timeout=0.5)
-            live.update(Group(render_table(), hint))
+            live.update(Group(render_table(), render_chain(), hint))

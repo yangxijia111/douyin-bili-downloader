@@ -1,0 +1,86 @@
+/* channels.css — 视频号页面注入 UI（视觉融入微信：小尺寸 / 圆角 / 微信绿）。 */
+
+.__cuin-btn {
+  appearance: none;
+  border: 1px solid rgba(7, 193, 96, 0.45);
+  background: rgba(7, 193, 96, 0.12);
+  color: #07c160;
+  font-size: 12px;
+  line-height: 1;
+  padding: 6px 10px;
+  margin: 0 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  white-space: nowrap;
+  vertical-align: middle;
+  transition: opacity 0.15s ease;
+}
+
+.__cuin-btn:hover {
+  background: rgba(7, 193, 96, 0.22);
+}
+
+.__cuin-btn.__cuin-busy {
+  opacity: 0.75;
+  cursor: default;
+}
+
+.__cuin-btn.__cuin-waiting {
+  opacity: 0.6;
+}
+
+.__cuin-menu {
+  position: fixed;
+  z-index: 2147483646;
+  min-width: 128px;
+  background: #ffffff;
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+  padding: 4px 0;
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.__cuin-menu-item {
+  padding: 9px 16px;
+  font-size: 13px;
+  color: #1a1a1a;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.__cuin-menu-item:hover {
+  background: #f5f5f5;
+}
+
+.__cuin-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 96px;
+  transform: translateX(-50%);
+  z-index: 2147483647;
+  max-width: 78vw;
+  background: rgba(0, 0, 0, 0.78);
+  color: #ffffff;
+  font-size: 12.5px;
+  line-height: 1.5;
+  padding: 9px 14px;
+  border-radius: 8px;
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  pointer-events: none;
+}
+
+.__cuin-float {
+  position: fixed;
+  right: 14px;
+  bottom: 168px;
+  z-index: 2147483645;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.__cuin-float .__cuin-btn {
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.16);
+  background: rgba(255, 255, 255, 0.92);
+}

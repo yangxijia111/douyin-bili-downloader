@@ -26,7 +26,7 @@ A multi-platform batch downloader for Douyin, Bilibili, WeChat Channels, and yt-
 
 - **抖音**：单个视频 / 图文 / 合集 / 音乐、短链解析、作者主页批量下载（发布 / 喜欢 / 合集 / 音乐）、登录账号收藏夹、直播录制、评论采集、热搜榜与关键词搜索
 - **哔哩哔哩**：单稿件（含分 P）、UP 主投稿、合集 / 系列、收藏夹、`b23.tv` 短链，DASH 音视频自动合并
-- **微信视频号**：本地 MITM 嗅探模式，边刷边自动捕获并下载（视频为加密 MP4，自动 ISAAC64 解密；图文、直播回放同样支持）
+- **微信视频号**：本地 MITM 嗅探 + 微信页面内下载按钮（首页 / 详情页 / 直播页），边刷边捕获、点按钮才下载（视频为加密 MP4，自动 ISAAC64 解密；图文、直播回放同样支持）
 - **其他平台**（yt-dlp 引擎）：爱奇艺、腾讯视频、优酷、芒果 TV、快手、西瓜视频、今日头条、微博、小红书
 
 所有链接混用时按域名自动分流。提供命令行（CLI）、REST API 服务与单文件网页控制台三种使用方式。
@@ -37,7 +37,7 @@ A multi-platform batch downloader for Douyin, Bilibili, WeChat Channels, and yt-
 
 - 抖音：无水印优先、自动选择最高码率、封面 / 音乐 / 头像 / JSON 元数据一并保存
 - 哔哩哔哩：画质 / 编码 / 音质可配置，增量下载按 `bvid + 分 P` 粒度补齐
-- 微信视频号：不注入、不改写微信前端（不依赖其 DOM / JS bundle），仅被动嗅探本机流量，显著降低前端改版导致的失效概率；仍依赖视频号 API 数据结构、字段、加密方式及 CDN 行为。视频仅前 128 KiB 加密，流式解密并做 MP4 魔数自校验。MITM 解密范围限定在 `weixin.qq.com` 域名白名单内，其余流量不解密
+- 微信视频号：页面注入为主（非侵入 hook fetch/XHR 与 finder 运行时函数 + 同源 `/__cuin/*` 桥接）+ 被动嗅探兜底，微信页面内直接出现下载按钮；不改写微信任何 JS。视频仅前 128 KiB 加密，流式解密并做 MP4 魔数自校验。MITM 解密范围限定在 `weixin.qq.com` 域名白名单内，其余流量不解密；九级链路诊断（代理 → 目标域 → HTML → 注入 → 心跳 → 按钮 → Feed → 下载）实时定位断点
 - 其他平台：单视频与剧集列表页均可，按平台配置 Cookie，画质可选，失败时分类提示（DRM / 需登录 / 地区限制 / 站方改版）
 
 **工程能力**
@@ -186,7 +186,7 @@ ytdlp:
 
 也可通过环境变量 `YTDLP_COOKIE_FILE` 指定浏览器导出的 Netscape 格式 `cookies.txt`，对所有平台生效。
 
-#### 微信视频号嗅探下载
+#### 微信视频号嗅探下载（页面注入 + 被动嗅探）
 
 视频号没有免登录的网页 API（登录态只存在于本机微信客户端内），因此采用嗅探模式：`--channels` 启动本机 MITM 代理，在本机微信里刷视频号即自动捕获并下载。
 
@@ -197,9 +197,30 @@ python run.py --channels
 
 首次使用需在 Windows 证书确认对话框中信任本地生成的根证书（每机唯一，存于 `~/.mitmproxy`；会话结束后自动恢复系统代理；异常强杀导致的代理残留会在下次启动时自动检测恢复，也可 `python run.py --repair-network` 手动恢复）。
 
-**能力边界（如实说明）**：此方案不依赖微信前端 DOM 和 JS bundle 注入，可显著降低前端页面改版造成的失效概率；**仍依赖**视频号 API 数据结构（`objectDesc` / `media` / `mediaType` / `liveInfo`）、字段（`decodeKey`）、ISAAC64 加密方式及 CDN URL 行为——微信协议层改动仍可能需要适配更新。
+**v2.0.2 起：微信页面内下载按钮（主要交互）**。启动嗅探后打开视频号首页 / 详情页 / 直播页，页面操作栏（找不到时右下角悬浮）会出现融入微信 UI 的「下载」小按钮：
 
-**MITM 最小权限**：HTTPS 解密仅限 `weixin.qq.com` 域名白名单（视频号 API 所在域，见 `channels/domains.py`），QQ 其它子域、CDN 与无关网站一律隧道转发不解密；如需扩展须通过 `channels.intercept_domains` 配置并自担评估责任。
+- 首页推荐流：按钮对应当前正在播放的视频，切换视频自动跟随（MutationObserver 监听 DOM 复用）；
+- 详情页 / 作者主页：优先插入微信现有操作栏；
+- 直播页：「开始录制 / 停止录制」（ffmpeg 拉流，停止时保留已录制部分）；
+- 菜单按当前 feed 真实能力动态生成：下载 / 下载最高画质 / 下载最低画质 / 下载封面；
+- 点击后显示「准备中 → 下载中 → ✓ 已完成 / ✗ 失败」；未识别当前视频时给出「请播放视频 1–2 秒或切换一次视频」的引导，绝不无反应。
+
+按钮只负责「识别当前视频 + 触发后端任务」；下载、ISAAC64 解密、落盘、数据库全在 Python 侧完成（前端不重新实现下载器）。数据经**同源虚拟接口** `https://channels.weixin.qq.com/__cuin/*` 回传（mitmproxy 本地响应，不转发腾讯服务器）：无 CORS、无公网暴露，`decodeKey` 与直链不经任何腾讯接口外泄。
+
+**捕获策略（四路并行，统一进 FeedStore）**：
+
+| 策略 | 说明 |
+| --- | --- |
+| A 被动响应 | mitmproxy 读白名单域响应里的 `objectDesc`（保留的兜底通道） |
+| B 页面网络 hook | 注入脚本非侵入包装 `window.fetch` / `XMLHttpRequest`（原语义不变） |
+| C 页面运行时 hook | 非侵入包装 `finderPcFlow` / `finderGetRecommend` 等页面函数 |
+| D 兼容补丁 | `res.wx.qq.com` JS bundle 补丁框架（**默认无补丁**；仅在有真机证据时按特征登记，失败自动 passthrough） |
+
+**链路诊断（替代「暂无嗅探结果」）**：CLI 会话与网页控制台「视频号」页实时展示九级状态链——代理连接 → 目标域命中 → HTML 拦截 → 脚本注入 → 前端心跳 → 页面按钮 → Feed 获取 → 下载成功，第一个 ✗ 即断点，并附针对性处置建议与各策略供数占比。
+
+**能力边界（如实说明）**：仍依赖视频号 API 数据结构（`objectDesc` / `media` / `mediaType` / `liveInfo`）、字段（`decodeKey`）、ISAAC64 加密方式及 CDN URL 行为——微信协议层改动仍可能需要适配更新；页面注入为**非侵入 hook + 同源桥接**，不改写微信任何 JS（参考项目 ltaoo/wx_channels_download 的行为与技术路线，本项目为独立实现，不复制其源码）。真机验收清单见 `docs/testing/channels-windows-smoke.md`。
+
+**MITM 最小权限**：HTTPS 解密仅限 `weixin.qq.com` 域名白名单（视频号 API 所在域，见 `channels/domains.py`），QQ 其它子域、CDN 与无关网站一律隧道转发不解密；如需扩展须通过 `channels.intercept_domains` 配置并自担评估责任（唯一有实际证据的候选扩展域是 `res.wx.qq.com`，仅在使用 Strategy D 时需要）。
 
 **证书生命周期**：`python run.py --channels-uninstall-ca` 可精确卸载根证书（按本机 CA 指纹删除，不触碰其它证书）；网页控制台「视频号」页提供安装 / 卸载 / 详情入口。详见 `SECURITY.md`。详见 `config.example.yml` 的 `channels` 配置段。
 
@@ -304,7 +325,7 @@ douyin-downloader/
 ├── Dockerfile              # Docker 部署
 ├── auth/                   # Cookie 与 msToken 管理
 ├── bilibili/               # 哔哩哔哩：URL 解析、WBI 签名、DASH 流、各类下载器
-├── channels/               # 微信视频号：mitmproxy 嗅探、ISAAC64 解密、下载与直播录制
+├── channels/               # 微信视频号：页面注入、MITM 嗅探、四策略捕获、ISAAC64 解密、下载与直播录制
 ├── cli/                    # 命令行入口、进度展示、登录流程、转写
 ├── config/                 # 配置加载与默认值
 ├── control/                # 队列管理、限速器、重试处理器
@@ -324,6 +345,7 @@ douyin-downloader/
 ```bash
 python -m pytest -q
 ruff check .
+node --test tests/frontend/*.test.js   # 视频号页面注入包的前端单测
 ```
 
 ### 已知限制
@@ -391,7 +413,7 @@ ruff check .
 
 - **Douyin**: single videos / image-notes / collections / music, short-link parsing, profile batch downloads (posts / likes / mixes / music), logged-in favorites, live recording, comments collection, hot-search board and keyword search
 - **Bilibili**: single videos (multi-page), user uploads, collections/series, favourites, `b23.tv` short links, with automatic DASH audio/video merging
-- **WeChat Channels (Shipinhao)**: local MITM sniffer mode — captures and downloads while you browse; encrypted MP4s are decrypted on the fly (ISAAC64), image posts and live replays included
+- **WeChat Channels (Shipinhao)**: local MITM sniffer + in-page download buttons (home / detail / live) — browse to capture, click the button to download; encrypted MP4s are decrypted on the fly (ISAAC64), image posts and live replays included
 - **Other platforms** (yt-dlp engine): iQIYI, Tencent Video, Youku, Mango TV, Kuaishou, Xigua, Toutiao, Weibo, Xiaohongshu
 
 Mixed links are auto-routed by domain. The tool runs as a CLI, a REST API server, or a single-file web console.
@@ -402,7 +424,7 @@ Mixed links are auto-routed by domain. The tool runs as a CLI, a REST API server
 
 - Douyin: watermark-free sources preferred, highest bitrate auto-selected, covers / music / avatars / JSON metadata saved alongside
 - Bilibili: configurable quality / codec / audio, incremental resume per `bvid + page`
-- WeChat Channels: passive sniffing only — no injection or rewriting of WeChat's frontend; only the first 128 KiB of each video are encrypted, decrypted streaming with an MP4 magic-number self-check
+- WeChat Channels: page injection first (non-invasive hooks on fetch/XHR and finder runtime functions + same-origin `/__cuin/*` bridge) with passive sniffing as fallback — a download button appears directly inside the WeChat page; no WeChat JS is rewritten. Only the first 128 KiB of each video are encrypted, decrypted streaming with an MP4 magic-number self-check. TLS interception is limited to the `weixin.qq.com` allowlist; everything else is tunneled undecrypted, and a nine-stage link diagnosis (proxy → domain → HTML → injection → heartbeat → button → feed → download) pinpoints breakage in real time
 - Other platforms: single videos and series pages, per-platform cookies, selectable quality, failures classified (DRM / login required / geo-restricted / site changed)
 
 **Engineering capabilities**
@@ -551,7 +573,7 @@ ytdlp:
 
 A browser-exported Netscape-format `cookies.txt` can also be supplied via the `YTDLP_COOKIE_FILE` environment variable, applying to every platform.
 
-#### WeChat Channels sniffing download
+#### WeChat Channels sniffing download (in-page injection + passive sniffing)
 
 Shipinhao has no login-free web API (auth lives only inside the local WeChat client), so this platform uses a sniffer: `--channels` starts a local MITM proxy that captures and downloads automatically while you browse Shipinhao in WeChat.
 
@@ -561,6 +583,29 @@ python run.py --channels
 ```
 
 On first use, trust the locally generated root certificate in the Windows confirmation dialog (per-machine unique, stored in `~/.mitmproxy`; the system proxy is restored automatically when the session ends). See the `channels` section in `config.example.yml` for options.
+
+**Since v2.0.2: in-page download buttons (primary interaction).** After starting the sniffer, open the Channels home / detail / live page in WeChat — a small WeChat-styled "Download" button appears in the page's action bar (or as a floating button bottom-right when the bar cannot be located):
+
+- Home feed: the button always targets the currently playing video and follows swipes (a MutationObserver handles DOM recycling);
+- Detail / profile pages: inserted into WeChat's existing action bar when found;
+- Live pages: "Start recording / Stop recording" (ffmpeg pulls the FLV stream; stopping keeps the partial file);
+- The menu is generated from the current feed's real capabilities: Download / Highest quality / Lowest quality / Cover;
+- After clicking, the button shows "Preparing → Downloading → ✓ Done / ✗ Failed"; when no current video is identified it shows guidance ("play the video for 1–2 seconds or switch once") instead of doing nothing.
+
+The button only identifies the current video and triggers a backend task — downloading, ISAAC64 decryption, saving and the database all stay on the Python side (the frontend never re-implements the downloader). Data travels over the **same-origin virtual endpoints** `https://channels.weixin.qq.com/__cuin/*` (answered locally by mitmproxy, never forwarded to Tencent): no CORS, no public exposure, and `decodeKey` / direct URLs never leave via any Tencent endpoint.
+
+**Capture strategies (four in parallel, unified into FeedStore)**:
+
+| Strategy | Description |
+| --- | --- |
+| A passive response | mitmproxy reads `objectDesc` from whitelisted-domain responses (kept as fallback) |
+| B page network hook | injected script wraps `window.fetch` / `XMLHttpRequest` non-invasively (original semantics unchanged) |
+| C page runtime hook | non-invasive wrappers around `finderPcFlow` / `finderGetRecommend` etc. |
+| D compatibility patch | `res.wx.qq.com` JS bundle patch framework (**no patches registered by default**; registered only with real-device evidence, auto-passthrough on failure) |
+
+**Link diagnostics (replaces "no results yet")**: the CLI session and the web console's Channels page show a nine-stage chain — proxy connection → target domain → HTML intercepted → script injected → frontend heartbeat → page button → feed captured → download success. The first ✗ is the breakpoint, with actionable advice and per-strategy capture counts.
+
+**Honest limitations**: still depends on the Channels API data structures (`objectDesc` / `media` / `mediaType` / `liveInfo`), fields (`decodeKey`), the ISAAC64 scheme and CDN URL behavior — protocol-level changes may still require adaptation. The injection is **non-invasive hooking + same-origin bridging**; no WeChat JS is rewritten (the behavior and technical route of ltaoo/wx_channels_download were studied; this is an independent implementation, its source is not copied). The Windows smoke-test checklist lives in `docs/testing/channels-windows-smoke.md`.
 
 #### Record a live stream (experimental)
 
@@ -679,6 +724,7 @@ douyin-downloader/
 ```bash
 python -m pytest -q
 ruff check .
+node --test tests/frontend/*.test.js   # frontend unit tests for the Channels inject package
 ```
 
 ### Known Limitations

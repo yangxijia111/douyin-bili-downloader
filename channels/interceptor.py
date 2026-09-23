@@ -1,16 +1,25 @@
-"""视频号流量嗅探引擎：mitmproxy 嵌入 + 根证书 + 系统代理。
+"""视频号流量嗅探引擎：mitmproxy 嵌入 + 根证书 + 系统代理 + 页面注入。
 
-工作方式（与 ltaoo/wx_channels_download 的根本差异）：
+v2.0.2 起的工作方式（v2.0.1 只有第一条，Windows 真机被证明不够用）：
 
-* 原项目要在微信页面里画下载按钮，必须用约 30 个正则**改写**微信前端 JS
-  源码（``res.wx.qq.com`` 的 bundle），微信一改版即失效；
-* 本项目不注入任何脚本——``WeChatAppEx.exe``（微信内嵌 Chromium）遵循系统
-  代理，我们把 mitmproxy 挂上去做 HTTPS 中间人，**被动读** API 响应里的
-  feed 数据（含 ``decodeKey``，见 :mod:`channels.feed`）。页面上没有任何
-  痕迹。能力边界：不依赖微信前端 DOM / JS bundle，可显著降低前端改版造成
-  的失效概率；但仍依赖视频号 API 的数据结构与字段（``objectDesc`` /
-  ``decodeKey`` 等）、ISAAC64 加密方式和 CDN 行为，微信协议层改动仍可能
-  导致失效。
+1. **页面注入（主要捕获方案）**：对 ``channels.weixin.qq.com/web/pages/*``
+   的 HTML 响应注入本项目 bootstrap（:mod:`channels.injector`），脚本在
+   微信页面里 hook ``fetch`` / ``XMLHttpRequest`` 与 finder 运行时函数，
+   捕获到的 feed 经同源虚拟接口 ``/__cuin/feed`` 送回 Python 侧
+   （:mod:`channels.virtual_host`）——页面内同时出现可视化下载按钮
+   （:mod:`channels.task_hub` 驱动下载 / 直播录制）；
+2. **被动响应嗅探（保留）**：``SnifferAddon`` 继续读白名单域响应里的
+   ``objectDesc``（:mod:`channels.pipeline` Strategy A），能解析就解析，
+   与页面注入的结果汇入同一个 :class:`~channels.feed_store.FeedStore`；
+3. **Strategy D 兼容补丁（框架就绪、默认无补丁）**：只有真机证据才登记
+   （:mod:`channels.patches`），未开启时 ``res.wx.qq.com`` 连接被隧道转发。
+
+与原项目 ltaoo/wx_channels_download 的差异：它用约 30 个正则改写微信前端
+JS 源码实现按钮与数据获取，微信一改版即失效；本项目的注入脚本只做
+**非侵入 hook + 同源桥接**，不改写微信任何 JS，按钮 UI 独立实现。能力
+边界：仍依赖视频号 API 的数据结构（``objectDesc`` / ``decodeKey``）、
+ISAAC64 加密与 CDN 行为，协议层改动仍需适配——因此 :mod:`channels.
+diagnostics` 把整条链路做成可观测的计数器与分级诊断，断点一目了然。
 
 嗅探会话的完整编排（CLI ``--channels`` 与 Server 端点共用）::
 
@@ -36,14 +45,17 @@ import sys
 from pathlib import Path
 from typing import Callable, Iterable, List, Optional
 
+from channels.diagnostics import ChannelsDiagnostics
 from channels.domains import (
     DEFAULT_INTERCEPT_SUFFIXES,
     build_allow_hosts_patterns,
     merge_suffixes,
     should_intercept_host,
 )
-from channels.feed import ChannelFeed, extract_feeds
+from channels.feed import ChannelFeed
 from channels.feed_store import FeedStore
+from channels.patches import PatchRegistry
+from channels.pipeline import FeedCapturePipeline
 from channels.proxy_recovery import (
     ProxyRecovery,
     WindowsProxyBackend,
@@ -359,12 +371,17 @@ class SystemProxyManager:
 # ----------------------------------------------------------------------
 
 class SnifferAddon:
-    """mitmproxy response hook：被动提取视频号 feed。
+    """mitmproxy response hook：Strategy A 被动提取视频号 feed。
 
     过滤策略宽松化以对抗微信改版：不按接口路径白名单，而是「白名单域
     （:mod:`channels.domains`）+ body 含 objectDesc 才尝试解析」。body 先做
     字符串预检再 ``json.loads``，避免对无关大响应做无谓解析。连接级解密
     范围由 ``allow_hosts`` 限定，这里是响应级防御纵深。
+
+    v2.0.2：解析统一走 :class:`~channels.pipeline.FeedCapturePipeline`
+    （与页面注入的 B/C 策略同一入口），并逐级记录诊断计数器
+    （candidate → json → objectDesc → parsed），真机验收时能直接看出
+    被动嗅探这一路是否在供数。
     """
 
     # 单响应体上限（列表类接口通常 < 2MB，超过的多半不是 feed 数据）。
@@ -375,10 +392,16 @@ class SnifferAddon:
         feed_store: FeedStore,
         on_capture: Optional[Callable[[List[ChannelFeed]], None]] = None,
         allowed_suffixes: Iterable[str] = DEFAULT_INTERCEPT_SUFFIXES,
+        pipeline: Optional[FeedCapturePipeline] = None,
+        diagnostics: Optional[ChannelsDiagnostics] = None,
     ):
         self.feed_store = feed_store
         self.on_capture = on_capture
         self.allowed_suffixes = tuple(allowed_suffixes) or DEFAULT_INTERCEPT_SUFFIXES
+        self.diagnostics = diagnostics or ChannelsDiagnostics()
+        self.pipeline = pipeline or FeedCapturePipeline(
+            feed_store, self.diagnostics, on_capture
+        )
 
     def response(self, flow) -> None:
         """mitmproxy hook（同步，运行在事件循环线程内）。"""
@@ -401,18 +424,30 @@ class SnifferAddon:
             return
         if not body or len(body) > self.MAX_BODY_BYTES:
             return
-        if "objectDesc" not in body:
-            return
+        self.diagnostics.incr("candidate_responses")
+
         import json
 
-        try:
-            payload = json.loads(body)
-        except json.JSONDecodeError:
+        payload = None
+        content_type = ""
+        headers = getattr(response, "headers", None)
+        if headers is not None:
+            try:
+                content_type = (headers.get("content-type") or "").lower()
+            except Exception:  # noqa: BLE001 —— 头部读取异常按无类型处理
+                content_type = ""
+        if "json" in content_type or "objectDesc" in body:
+            try:
+                payload = json.loads(body)
+            except json.JSONDecodeError:
+                return
+            self.diagnostics.incr("json_responses")
+        if payload is None:
             return
-        feeds = extract_feeds(payload, source_api=request.path)
-        if not feeds:
+        if "objectDesc" not in body:
             return
-        fresh = self.feed_store.add(feeds)
+        self.diagnostics.incr("object_desc_responses")
+        fresh = self.pipeline.ingest_passive(payload, source_api=request.path)
         if fresh:
             logger.info(
                 "捕获 %d 条视频号动态（%s，最新: %s）",
@@ -420,11 +455,6 @@ class SnifferAddon:
                 request.path,
                 fresh[0].title[:40],
             )
-            if self.on_capture:
-                try:
-                    self.on_capture(fresh)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("on_capture 回调失败: %s", exc)
 
 
 class ChannelsInterceptorError(RuntimeError):
@@ -436,6 +466,12 @@ class ChannelsInterceptor:
 
     mitmproxy 与宿主共享同一个 asyncio 事件循环（CLI 主循环 / FastAPI 的
     loop 里以 task 形式运行），addon 回调因此天然线程安全。
+
+    v2.0.2 addon 组装（三个 addon 共享同一份诊断与流水线）::
+
+        SnifferAddon       Strategy A  被动响应捕获
+        InjectorAddon      页面注入     HTML bootstrap + CSP + 连接计数
+        VirtualHostAddon   虚拟端点     /__cuin/*（assets / feed / task）
     """
 
     def __init__(
@@ -447,6 +483,10 @@ class ChannelsInterceptor:
         cert_manager: Optional[CertificateManager] = None,
         on_capture: Optional[Callable[[List[ChannelFeed]], None]] = None,
         extra_domains: Optional[Iterable[str]] = None,
+        diagnostics: Optional[ChannelsDiagnostics] = None,
+        task_hub: Optional[object] = None,
+        inject_enabled: bool = True,
+        patch_registry: Optional[PatchRegistry] = None,
     ):
         if not mitmproxy_available():  # pragma: no cover - 环境缺依赖
             raise RuntimeError(MITMPROXY_INSTALL_HINT)
@@ -457,6 +497,13 @@ class ChannelsInterceptor:
         self.on_capture = on_capture
         # 解密白名单 = 默认域 + channels.intercept_domains 扩展（默认为空）。
         self.allowed_suffixes = merge_suffixes(extra_domains)
+        self.diagnostics = diagnostics or ChannelsDiagnostics()
+        self.pipeline = FeedCapturePipeline(
+            feed_store, self.diagnostics, on_capture
+        )
+        self.task_hub = task_hub
+        self.inject_enabled = inject_enabled
+        self.patch_registry = patch_registry or PatchRegistry(diagnostics=self.diagnostics)
         self._master = None
         self._task: Optional[asyncio.Task] = None
 
@@ -501,10 +548,30 @@ class ChannelsInterceptor:
             allowed_suffixes=self.allowed_suffixes,
         )
         master = DumpMaster(opts, with_termlog=False, with_dumper=False)
+        from channels.injector import InjectorAddon
+        from channels.virtual_host import VirtualHostAddon
+
         master.addons.add(
             SnifferAddon(
                 self.feed_store, on_capture=self.on_capture,
                 allowed_suffixes=self.allowed_suffixes,
+                pipeline=self.pipeline, diagnostics=self.diagnostics,
+            )
+        )
+        master.addons.add(
+            InjectorAddon(
+                self.diagnostics,
+                allowed_suffixes=self.allowed_suffixes,
+                inject_enabled=self.inject_enabled,
+                patch_registry=self.patch_registry,
+            )
+        )
+        master.addons.add(
+            VirtualHostAddon(
+                self.pipeline,
+                self.diagnostics,
+                allowed_suffixes=self.allowed_suffixes,
+                task_hub=self.task_hub,
             )
         )
         self._master = master

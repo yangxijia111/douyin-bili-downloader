@@ -132,10 +132,18 @@ class ChannelsDownloader:
                 self.progress_reporter.advance_item(status)
         return result
 
-    async def download_feed(self, feed: ChannelFeed, *, manual: bool = False) -> str:
+    async def download_feed(
+        self,
+        feed: ChannelFeed,
+        *,
+        manual: bool = False,
+        quality: Optional[str] = None,
+    ) -> str:
         """下载单条捕获，返回 ``done`` / ``skipped`` / ``failed``。
 
-        ``manual`` 为 True 时（用户在列表里点下载）跳过增量判重。
+        ``manual`` 为 True 时（用户在列表里点下载 / 微信页面按钮触发）跳过
+        增量判重；``quality`` 覆盖配置画质（页面按钮的「最高/最低画质」），
+        为 None 时用 ``channels.quality``。
         """
         try:
             if feed.kind == "live":
@@ -148,7 +156,7 @@ class ChannelsDownloader:
                 files = await self._download_images(feed)
                 await self._record(feed, files, "channels_image")
             else:
-                files = await self._download_video(feed)
+                files = await self._download_video(feed, quality=quality)
                 await self._record(feed, files, "channels_video")
             return "done"
         except asyncio.CancelledError:
@@ -292,8 +300,12 @@ class ChannelsDownloader:
         ext = Path(urlsplit(url).path).suffix.lower()
         return ext if ext in _ALLOWED_EXTS else default
 
-    async def _download_video(self, feed: ChannelFeed) -> List[Path]:
-        url = pick_quality_url(feed, str(self._opt("quality", "highest")))
+    async def _download_video(
+        self, feed: ChannelFeed, *, quality: Optional[str] = None
+    ) -> List[Path]:
+        url = pick_quality_url(
+            feed, str(quality if quality is not None else self._opt("quality", "highest"))
+        )
         if not url:
             raise ChannelsDownloadError("视频缺少可下载直链")
         context = self._build_item_context(feed)
@@ -389,6 +401,18 @@ class ChannelsDownloader:
             target.unlink(missing_ok=True)
             return False
 
+    async def download_cover(self, feed: ChannelFeed) -> List[Path]:
+        """只下载封面（微信页面按钮「下载封面」用）。"""
+        if not feed.cover_url:
+            raise ChannelsDownloadError("该动态没有封面地址")
+        context = self._build_item_context(feed)
+        save_dir: Path = context["save_dir"]
+        target = save_dir / f"{context['file_stem']}_cover{self._ext_from_url(feed.cover_url, '.jpg')}"
+        if not await self._fetch_simple(feed.cover_url, target):
+            raise ChannelsDownloadError("封面下载失败")
+        feed.downloaded_paths = [str(target)]
+        return [target]
+
     async def _download_live(self, feed: ChannelFeed, *, manual: bool = False) -> str:
         if not feed.url:
             feed.error = "直播缺少拉流地址"
@@ -410,6 +434,13 @@ class ChannelsDownloader:
         try:
             await self._live_recorder.record(feed.url, output)
         except asyncio.CancelledError:
+            # 手动停止录制（页面按钮「停止录制」）：ffmpeg 已被优雅终止，
+            # 已录制的部分文件保留并登记，让用户在下载目录里能找到。
+            if output.exists():
+                try:
+                    await self._record(feed, [output], "channels_live")
+                except Exception as exc:  # noqa: BLE001 —— 登记失败不掩盖取消
+                    logger.warning("停止录制后登记部分文件失败: %s", exc)
             raise
         except Exception as exc:  # noqa: BLE001
             feed.error = str(exc)

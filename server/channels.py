@@ -6,7 +6,7 @@ CLI 的 ``--channels`` 是独占前台会话；Server 形态下嗅探会话由 R
 
 端点（在 ``server.app.build_app`` 里挂载）::
 
-    GET  /api/v1/channels/status                     会话与证书状态
+    GET  /api/v1/channels/status                     会话与证书状态（含诊断链）
     GET  /api/v1/channels/certificate                证书详情（指纹/subject/有效期）
     POST /api/v1/channels/certificate/install        安装证书（弹 Windows 确认框）
     POST /api/v1/channels/certificate/uninstall      卸载证书（按本机 CA 指纹精确删除）
@@ -20,6 +20,12 @@ CLI 的 ``--channels`` 是独占前台会话；Server 形态下嗅探会话由 R
 手动下载与自动下载共用一个 :class:`~channels.downloader.ChannelsDownloader`
 实例（连接池共享）；手动下载以后台 task 执行，前端通过轮询 feeds 列表里的
 ``status`` 观察进度（与 job 中心不同，这里条目多、粒度细，走轻量路径）。
+
+v2.0.2：微信页面内下载按钮的任务走 :class:`channels.task_hub.
+ChannelsTaskHub`（与手动下载共用下载器），页面经代理的虚拟接口
+``/__cuin/*`` 访问它；:class:`channels.diagnostics.ChannelsDiagnostics`
+实例由本管理器持有（跨会话保留），status 端点因此能持续报告
+「代理 → 目标域 → HTML → 注入 → 心跳 → 按钮 → Feed → 下载」状态链。
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, Optional, Set
 
+from channels.diagnostics import ChannelsDiagnostics
 from channels.feed_store import FeedStore
 from channels.interceptor import (
     CertificateManager,
@@ -34,6 +41,8 @@ from channels.interceptor import (
     SystemProxyManager,
     mitmproxy_available,
 )
+from channels.patches import PatchRegistry
+from channels.task_hub import ChannelsTaskHub
 from config import ConfigLoader
 from core.downloader_base import DownloadResult
 from storage import Database, FileManager
@@ -59,6 +68,10 @@ class ChannelsSessionManager:
         self._running: Optional[Dict[str, Any]] = None
         self._manual_tasks: Set[asyncio.Task] = set()
         self._cert_manager = CertificateManager()
+        # 诊断计数器跨会话保留：停止会话后 Web 仍能看到最后一轮的链路状态。
+        self.diagnostics = ChannelsDiagnostics()
+        # Strategy D 补丁注册表（默认空；登记策略见 channels/patches.py）。
+        self.patch_registry = PatchRegistry(diagnostics=self.diagnostics)
 
     @property
     def _start_lock(self) -> asyncio.Lock:
@@ -86,7 +99,8 @@ class ChannelsSessionManager:
                 "exists": cert_exists,
                 "installed": cert_exists and self._cert_manager.is_installed(),
             },
-            "auto_download": bool(self._section().get("auto_download", True)),
+            "auto_download": bool(self._section().get("auto_download", False)),
+            "inject_ui": bool(self._section().get("inject_ui", True)),
         }
         if self._running is not None:
             stats: DownloadResult = self._running["stats"]
@@ -103,17 +117,22 @@ class ChannelsSessionManager:
                     },
                 }
             )
+        payload["diagnostics"] = self.diagnostics.snapshot(
+            downloads_success=(
+                self._running["stats"].success if self._running is not None else 0
+            )
+        )
         return payload
 
     def feeds(self, *, limit: int = 200) -> Dict[str, Any]:
-        """捕获列表（最新在前）+ 会话统计。
+        """捕获列表（最新在前）+ 会话统计 + 捕获策略分布。
 
         只返回 :meth:`ChannelFeed.to_public_dict` 脱敏视图：直链、decodeKey
         等下载敏感字段不出进程。手动下载端点用 feed_id 在服务端取回完整
         对象，前端无需直链。
         """
         if self._running is None:
-            return {"running": False, "feeds": []}
+            return {"running": False, "feeds": [], "strategy_stats": {}}
         store: FeedStore = self._running["store"]
         stats: DownloadResult = self._running["stats"]
         items = [feed.to_public_dict() for feed in reversed(store.all())]
@@ -128,6 +147,7 @@ class ChannelsSessionManager:
             },
             "feeds": items[: max(1, int(limit))],
             "total": len(items),
+            "strategy_stats": self.diagnostics.strategy_stats(),
         }
 
     # ------------------------------------------------------------------
@@ -196,9 +216,10 @@ class ChannelsSessionManager:
             auto = bool(
                 auto_download
                 if auto_download is not None
-                else self._section().get("auto_download", True)
+                else self._section().get("auto_download", False)
             )
             live_record = bool(self._section().get("live_record", False))
+            inject_ui = bool(self._section().get("inject_ui", True))
             # MITM 解密白名单扩展（默认只有 weixin.qq.com，见 channels.domains）。
             extra_domains = self._section().get("intercept_domains")
             if not isinstance(extra_domains, (list, tuple)):
@@ -220,13 +241,27 @@ class ChannelsSessionManager:
                 logger.warning("已自动恢复上次异常退出残留的系统代理: %s", recovery_report["detail"])
 
             store = FeedStore()
+            from channels.downloader import ChannelsDownloader
+            from channels.task_hub import ChannelsTaskHub
+            from channels.worker import run_auto_download_worker
+
+            stats = DownloadResult()
+            downloader = ChannelsDownloader(
+                self.config, self.file_manager, database=database
+            )
+            # 微信页面按钮的任务中心（/__cuin/task 虚拟端点驱动）；必须在
+            # interceptor.start() 之前构造——虚拟端点在启动时捕获引用。
+            task_hub = ChannelsTaskHub(store, downloader, stats)
             interceptor = ChannelsInterceptor(
                 store, port=listen_port, cert_manager=self._cert_manager,
-                extra_domains=extra_domains,
+                extra_domains=extra_domains, diagnostics=self.diagnostics,
+                task_hub=task_hub, inject_enabled=inject_ui,
+                patch_registry=self.patch_registry,
             )
             try:
                 await interceptor.start()
             except Exception as exc:  # noqa: BLE001 —— 端口占用等
+                await downloader.aclose()
                 raise ChannelsSessionError(f"嗅探代理启动失败: {exc}") from exc
 
             proxy_manager = SystemProxyManager()
@@ -234,15 +269,9 @@ class ChannelsSessionManager:
                 proxy_manager.enable(port=listen_port)
             except Exception as exc:  # noqa: BLE001
                 await interceptor.stop()
+                await downloader.aclose()
                 raise ChannelsSessionError(f"系统代理设置失败: {exc}") from exc
 
-            from channels.downloader import ChannelsDownloader
-            from channels.worker import run_auto_download_worker
-
-            stats = DownloadResult()
-            downloader = ChannelsDownloader(
-                self.config, self.file_manager, database=database
-            )
             holder: Dict[str, Any] = {
                 "store": store,
                 "interceptor": interceptor,
@@ -252,6 +281,7 @@ class ChannelsSessionManager:
                 "port": listen_port,
                 "auto": auto,
                 "live_record": live_record,
+                "task_hub": task_hub,
                 "worker": None,
             }
             holder["worker"] = asyncio.create_task(
@@ -282,6 +312,11 @@ class ChannelsSessionManager:
         if worker is not None:
             worker.cancel()
             await asyncio.gather(worker, return_exceptions=True)
+        # 微信页面按钮的任务（含直播录制）随之取消。
+        task_hub: Optional[ChannelsTaskHub] = holder.get("task_hub")
+        if task_hub is not None:
+            task_hub.cancel_all()
+            await task_hub.wait_idle(timeout=5.0)
         try:
             await holder["interceptor"].stop()
         except Exception as exc:  # noqa: BLE001

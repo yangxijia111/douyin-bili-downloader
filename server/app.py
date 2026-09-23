@@ -68,7 +68,7 @@ logger = setup_logger("REST")
 try:  # 版本号在项目根的 __init__.py 里，缺失时退默认值
     from __init__ import __version__ as _VERSION
 except ImportError:  # pragma: no cover - 打包/独立运行场景
-    _VERSION = "2.0.1"
+    _VERSION = "2.0.2"
 
 # 网页控制台根目录（项目根 /web）
 _WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
