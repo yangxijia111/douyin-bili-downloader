@@ -100,7 +100,15 @@ class FfmpegLocator:
         self._available: Optional[bool] = None
         self._cached_at: float = 0.0
         self._last_error: Optional[str] = None
-        self._lock = asyncio.Lock()
+        # 惰性锁：Python 3.9/3.10 的 asyncio.Lock() 在构造时急切绑定当前
+        # 事件循环，无运行中循环的线程（如同步测试）会直接 RuntimeError。
+        # 与 api_client 的 _wbi_lock 同一约定——首次使用时再创建。
+        self._lock: Optional[asyncio.Lock] = None
+
+    def _get_lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
 
     # -- public API ---------------------------------------------------------
 
@@ -123,7 +131,7 @@ class FfmpegLocator:
             FfmpegNotAvailable: 缓存中没有可用 ffmpeg 时（路径找不到、
                 ``-version`` 探测失败、平台不支持等）。
         """
-        async with self._lock:
+        async with self._get_lock():
             await self._refresh_if_needed()
             if not self._available:
                 raise FfmpegNotAvailable(self._last_error or "unknown")
@@ -132,7 +140,7 @@ class FfmpegLocator:
 
     async def diagnostic(self) -> dict:
         """返回 ``GET /api/v1/transcript/diagnostic`` 的字段三元组。"""
-        async with self._lock:
+        async with self._get_lock():
             await self._refresh_if_needed()
         return {
             "ffmpeg_available": bool(self._available),

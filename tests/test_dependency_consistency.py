@@ -85,19 +85,6 @@ def test_requirements_txt_covers_pyproject_runtime_deps():
         assert name in txt_names, f"pyproject 运行时依赖 {name} 未在 requirements.txt 声明"
 
 
-def _marker_applies_to_current_python(marker: str) -> bool:
-    """极简 python_version 标记评估（只支持 < / >= 与 3.x 字面量）。"""
-    import sys
-
-    match = re.search(r"python_version\s*(<|>=)\s*'?(\d+)\.(\d+)'?", marker)
-    if not match:
-        return True
-    op, major, minor = match.group(1), int(match.group(2)), int(match.group(3))
-    current = (sys.version_info.major, sys.version_info.minor)
-    target = (major, minor)
-    return current < target if op == "<" else current >= target
-
-
 def test_lock_pins_satisfy_pyproject_constraints():
     pyproject = _load_pyproject()
     pins = _load_lock()
@@ -107,8 +94,20 @@ def test_lock_pins_satisfy_pyproject_constraints():
     checked = 0
     for requirement in deps:
         marker = requirement.split(";", 1)
-        if len(marker) == 2 and not _marker_applies_to_current_python(marker[1]):
-            continue  # lock 快照按当前解释器生成，标记不适用本解释器的依赖合法缺席
+        # lock 是固定解释器（Python 3.13）的快照：带 python_version 标记的
+        # 依赖（如 tomli<3.11、mitmproxy>=3.10）是否在快照里取决于快照解释器
+        # 而非运行本测试的解释器，此类依赖一律不强制要求出现在 lock 中
+        # （出现时仍校验版本约束）。
+        if len(marker) == 2 and "python_version" in marker[1]:
+            spec = marker[0].strip()
+            name = _req_name(requirement)
+            constraint = spec[len(name):].replace("(", "").replace(")", "").strip()
+            if name in pins and constraint and "*" not in constraint:
+                assert _satisfies(pins[name], constraint), (
+                    f"lock 中 {name}=={pins[name]} 不满足 pyproject 约束 {constraint}"
+                )
+                checked += 1
+            continue
         spec = marker[0].strip()
         name = _req_name(requirement)
         constraint = spec[len(name):].replace("(", "").replace(")", "").strip()
