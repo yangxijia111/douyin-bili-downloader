@@ -5,8 +5,10 @@
 #     yt-dlp 刻意不设上界，便于 `pip install -U yt-dlp` 跟进站方解析器更新；
 #   * CI 复现：ci.yml 的 `pinned` 作业（Python 3.12）用本文件锁定安装，
 #     验证整套测试在确定版本组合上通过；
-#   * lock 里的部分 pin（aiohttp / fastapi / pytest / hypothesis 等）要求
-#     Python >= 3.10，故锁定作业只在 3.12 上运行；
+#   * 本文件是 **Python 3.13 解释器**的快照：mitmproxy 对 typing-extensions
+#     的上界标记仅在 <3.13 生效，因此 `pip install -r requirements.lock`
+#     必须在 3.13 上执行（CI 的 pinned / Release 作业已固定 3.13），
+#     在更低 Python 上会因 typing_extensions 约束冲突而 ResolutionImpossible；
 #   * 上游大版本升级后用下面命令重建：
 #       .venv/Scripts/python.exe -m pip freeze --exclude-editable > requirements.lock
 #     （或 POSIX：pip freeze --exclude-editable > requirements.lock）

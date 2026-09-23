@@ -63,8 +63,10 @@ jobs:
         run: python scripts/ci_smoke.py
 
   # ----------------------------------------------------------------------
-  # 锁定版本矩阵：requirements.lock 在 Python 3.12 上的可复现验证。
-  # 3.9-3.11 不跑此作业——lock 以最新依赖为准，部分 pin 需要更高 Python。
+  # 锁定版本矩阵：requirements.lock 的可复现验证。
+  # lock 是 Python 3.13 解释器的完整快照（mitmproxy 对 typing-extensions
+  # 的上界仅在 <3.13 生效，快照里的 typing_extensions 只与 3.13 自洽），
+  # 因此锁定作业必须在 3.13 上运行；3.9-3.12 由 core 矩阵用范围声明验证。
   # ----------------------------------------------------------------------
   pinned:
     strategy:
@@ -76,7 +78,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.13"
           cache: pip
       - name: Install from requirements.lock
         run: |
