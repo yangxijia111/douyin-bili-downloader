@@ -70,3 +70,5 @@ cookies.txt
 _run_tests.py
 _pytest_out.txt
 _check*.txt
+.verify/
+.test-tmp/

@@ -119,6 +119,10 @@ async def merge_dash_streams(
         _, stderr = await asyncio.wait_for(
             process.communicate(), timeout=MERGE_TIMEOUT_SECONDS
         )
+    except asyncio.CancelledError:
+        await _terminate(process)
+        tmp_output.unlink(missing_ok=True)
+        raise
     except asyncio.TimeoutError:
         await _terminate(process)
         logger.error("ffmpeg merge timed out after %ss for %s", MERGE_TIMEOUT_SECONDS, output_path.name)

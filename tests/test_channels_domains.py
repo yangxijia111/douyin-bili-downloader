@@ -215,3 +215,37 @@ class TestInterceptorWiring:
             chain = []
 
         ChannelsInterceptor._drop_errorcheck(SimpleNamespace(addons=_EmptyAddons()))
+
+
+class TestMediaHost:
+    """媒体分片 CDN 域判定（直播回放全量下载的 URL 记录依据，2026-09-25）。"""
+
+    def test_media_cdn_host_is_media(self):
+        from channels.domains import is_media_host
+
+        assert is_media_host("finder.video.qq.com")
+        assert is_media_host("finder.video.qq.com:443")
+
+    def test_media_host_is_not_feed_intercept(self):
+        # 媒体域只记录 URL，不得进入 feed 响应解析通道。
+        assert not should_intercept_host("finder.video.qq.com")
+
+    def test_other_hosts_are_not_media(self):
+        from channels.domains import is_media_host
+
+        assert not is_media_host("channels.weixin.qq.com")
+        assert not is_media_host("finder.video.qq.com.evil.com")
+        assert not is_media_host("")
+
+    def test_allow_patterns_include_media_when_appended(self):
+        # ChannelsInterceptor.build_options 把媒体域并入 allow_hosts；
+        # 这里验证合并后模式对两类主机都命中、对无关主机仍不命中。
+        from channels.domains import MEDIA_URL_SUFFIXES
+
+        patterns = build_allow_hosts_patterns(
+            DEFAULT_INTERCEPT_SUFFIXES + MEDIA_URL_SUFFIXES
+        )
+        joined = "|".join(patterns)
+        assert re.search(joined, "channels.weixin.qq.com:443", re.IGNORECASE)
+        assert re.search(joined, "finder.video.qq.com:443", re.IGNORECASE)
+        assert not re.search(joined, "www.douyin.com:443", re.IGNORECASE)

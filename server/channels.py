@@ -34,6 +34,7 @@ import asyncio
 import time
 from typing import Any, Dict, Optional, Set
 
+from channels.connection import ConnectionMonitor
 from channels.diagnostics import ChannelsDiagnostics
 from channels.feed_store import FeedStore
 from channels.interceptor import (
@@ -92,8 +93,9 @@ class ChannelsSessionManager:
         self._running: Optional[Dict[str, Any]] = None
         self._manual_tasks: Set[asyncio.Task] = set()
         self._cert_manager = CertificateManager()
-        # 诊断计数器跨会话保留：停止会话后 Web 仍能看到最后一轮的链路状态。
+        # 停止后保留最后一轮诊断；下一次启动时清零，避免旧结果掩盖新故障。
         self.diagnostics = ChannelsDiagnostics()
+        self._connection_monitor = ConnectionMonitor()
         # 分享链接下载的待处理链接（v2.0.3）。
         self._pending_link: Optional[Dict[str, Any]] = None
         # Strategy D 补丁注册表（默认空；登记策略见 channels/patches.py）。
@@ -126,15 +128,18 @@ class ChannelsSessionManager:
                 "installed": cert_exists and self._cert_manager.is_installed(),
             },
             "auto_download": bool(self._section().get("auto_download", False)),
+            "default_quality": self._section().get("quality", "highest"),
             "inject_ui": bool(self._section().get("inject_ui", True)),
         }
         if self._running is not None:
+            self._connection_monitor.refresh(self._running["port"])
             stats: DownloadResult = self._running["stats"]
             payload.update(
                 {
                     "port": self._running["port"],
                     "auto_download": self._running["auto"],
                     "feeds_total": len(self._running["store"]),
+                    "wechat_connection": self._connection_monitor.snapshot(),
                     "stats": {
                         "total": stats.total,
                         "success": stats.success,
@@ -148,6 +153,31 @@ class ChannelsSessionManager:
                 self._running["stats"].success if self._running is not None else 0
             )
         )
+        connection = payload.get("wechat_connection", {})
+        if payload["diagnostics"]["stage"] in ("no_proxy", "no_target_domain"):
+            if connection.get("connection_proxy_matches") is False:
+                ports = connection.get("connection_proxy_ports") or []
+                message = "Windows 连接代理与捕获代理不一致。"
+                if ports:
+                    message += "微信读取的代理端口为 %s，捕获端口为 %s。" % (
+                        ", ".join(map(str, ports)), self._running["port"],
+                    )
+                message += "请停止后重新启动捕获以同步代理，再彻底退出并重新打开微信。"
+                payload["diagnostics"].update(level="error", message=message)
+            elif connection.get("wechat_running") is False:
+                payload["diagnostics"].update(
+                    level="warn", message="未检测到电脑微信。请打开微信，进入视频号并播放目标视频。",
+                )
+            elif connection.get("proxy_connected") is False:
+                ports = connection.get("other_proxy_ports") or []
+                message = "未检测到微信连接捕获代理（127.0.0.1:%s）。" % self._running["port"]
+                if ports:
+                    message += "微信当前连接的其他本机端口：%s。" % ", ".join(map(str, ports))
+                message += (
+                    "请停止后重新启动捕获，再从微信菜单彻底退出并重新打开微信。"
+                    "其他应用的代理连接不能证明微信已接入。"
+                )
+                payload["diagnostics"].update(level="error", message=message)
         if self._pending_link is not None:
             payload["link"] = dict(self._pending_link)
         return payload
@@ -166,6 +196,7 @@ class ChannelsSessionManager:
         items = [feed.to_public_dict() for feed in reversed(store.all())]
         return {
             "running": True,
+            "default_quality": self._section().get("quality", "highest"),
             "auto_download": self._running["auto"],
             "stats": {
                 "total": stats.total,
@@ -268,8 +299,10 @@ class ChannelsSessionManager:
             if recovery_report["action"] == "restored":
                 logger.warning("已自动恢复上次异常退出残留的系统代理: %s", recovery_report["detail"])
 
+            self.diagnostics.reset()
             store = FeedStore()
             from channels.downloader import ChannelsDownloader
+            from channels.mse_capture import MseCaptureStore
             from channels.task_hub import ChannelsTaskHub
             from channels.worker import run_auto_download_worker
 
@@ -280,11 +313,22 @@ class ChannelsSessionManager:
             # 微信页面按钮的任务中心（/__cuin/task 虚拟端点驱动）；必须在
             # interceptor.start() 之前构造——虚拟端点在启动时捕获引用。
             task_hub = ChannelsTaskHub(store, downloader, stats)
+            # 未取得 decodeKey 时不能用 MSE 头拼接 CDN 密文；仅保存完整播放捕获。
+            # MSE 分片旁路（/__cuin/mse 虚拟端点驱动）：新版微信 MSE 播放下
+            # 的主保存通道（自动保存 + 页面按钮手动保存）；与 task_hub 同样
+            # 在启动前构造。
+            mse_store = MseCaptureStore(
+                store,
+                self.diagnostics,
+                downloader=downloader,
+                stats=stats,
+                auto_save=bool(self._section().get("mse_auto_save", True)),
+            )
             interceptor = ChannelsInterceptor(
                 store, port=listen_port, cert_manager=self._cert_manager,
                 extra_domains=extra_domains, diagnostics=self.diagnostics,
                 task_hub=task_hub, inject_enabled=inject_ui,
-                patch_registry=self.patch_registry,
+                patch_registry=self.patch_registry, mse_store=mse_store,
             )
             try:
                 await interceptor.start()
@@ -331,6 +375,7 @@ class ChannelsSessionManager:
             holder, self._running = self._running, None
         if holder is None:
             return self.status()
+        await self._connection_monitor.aclose()
         for task in self._manual_tasks:
             task.cancel()
         if self._manual_tasks:
@@ -417,8 +462,10 @@ class ChannelsSessionManager:
         payload = self.status()
         payload["link"] = dict(self._pending_link)
         payload["link"]["guidance"] = (
-            "请在本机微信里打开该链接（发送到任意聊天后点击，或浏览器打开后选择"
-            "「在微信中打开」）。预览页加载后工具自动捕获并下载该视频。"
+            "请在本机微信里打开该链接（发送到任意聊天后点击）。打开的预览页会"
+            "自动跳转到网页版详情页——保持窗口打开，视频播放时工具自动捕获分片"
+            "保存（完整看完或播放片刻后返回均可）。若页面没有自动跳转，请从微信"
+            "「发现→视频号」里播放目标视频，效果相同。"
         )
         return payload
 
@@ -426,7 +473,7 @@ class ChannelsSessionManager:
         self._pending_link = None
         return {"ok": True}
 
-    async def download_feed(self, feed_id: str) -> Dict[str, Any]:
+    async def download_feed(self, feed_id: str, *, quality: Optional[str] = None) -> Dict[str, Any]:
         """手动下载（或录制）单条；返回排队状态，进度看 feeds 列表。"""
         if self._running is None:
             raise ChannelsSessionError("嗅探会话未运行")
@@ -434,13 +481,16 @@ class ChannelsSessionManager:
         feed = store.get(feed_id)
         if feed is None:
             raise KeyError(feed_id)
-        if feed.status in ("downloading", "done"):
+        if feed.status == "downloading" or (feed.status == "done" and quality is None):
             return {"feed_id": feed_id, "status": feed.status, "queued": False}
+        feed.error = ""
         store.set_status(feed, "downloading")
 
         async def _run() -> None:
             try:
-                status = await self._running["downloader"].download_feed(feed, manual=True)
+                status = await self._running["downloader"].download_feed(
+                    feed, manual=True, quality=quality
+                )
             except asyncio.CancelledError:
                 store.set_status(feed, "pending")
                 raise

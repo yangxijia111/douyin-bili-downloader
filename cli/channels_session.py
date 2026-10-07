@@ -143,6 +143,7 @@ async def run_channels_session(
     file_manager = FileManager(config.get("path"))
 
     from channels.downloader import ChannelsDownloader
+    from channels.mse_capture import MseCaptureStore
     from channels.task_hub import ChannelsTaskHub
 
     downloader = ChannelsDownloader(config, file_manager, database=database)
@@ -151,6 +152,16 @@ async def run_channels_session(
     patch_registry = PatchRegistry(diagnostics)
     stats = DownloadResult()
     task_hub = ChannelsTaskHub(store, downloader, stats)
+    # 未取得 decodeKey 时不能用 MSE 头拼接 CDN 密文；仅保存完整播放捕获。
+    # MSE 分片旁路（/__cuin/mse）：新版微信 MSE 播放下的主保存通道
+    # （加载结束且分片完整后自动保存 + 页面按钮手动保存）。
+    mse_store = MseCaptureStore(
+        store,
+        diagnostics,
+        downloader=downloader,
+        stats=stats,
+        auto_save=bool(section.get("mse_auto_save", True)),
+    )
 
     proxy_manager = SystemProxyManager()
 
@@ -181,7 +192,7 @@ async def run_channels_session(
             store, port=listen_port, cert_manager=cert_manager,
             extra_domains=extra_domains, diagnostics=diagnostics,
             task_hub=task_hub, inject_enabled=inject_ui,
-            patch_registry=patch_registry,
+            patch_registry=patch_registry, mse_store=mse_store,
         )
         await interceptor.start()
         try:
@@ -308,8 +319,9 @@ async def _interactive_loop(
         return Text.from_markup(" ".join(parts) + f"\n[dim]{advice['message']}[/dim]")
 
     hint = Text.from_markup(
-        "[dim]现在打开本机微信 → 视频号，页面中会出现「下载」按钮；"
-        + ("自动下载已开启。" if auto_download else "自动下载未开启（channels.auto_download=false），仅捕获 + 按钮下载。")
+        "[dim]现在打开本机微信 → 视频号：播放完成的视频会经 MSE 分片自动保存"
+        "（channels.mse_auto_save），页面中也有「下载」按钮可手动保存当前视频；"
+        + ("feed 直链自动下载已开启。" if auto_download else "feed 直链自动下载未开启（channels.auto_download）。")
         + " 按 Ctrl+C 结束会话。[/dim]"
     )
 
@@ -334,8 +346,9 @@ def _print_link_guidance(display: ProgressDisplay, link) -> None:
     display.print_info(
         f"已识别视频号分享链接（id: {link.share_id}）。"
         "请在**本机微信**里打开该链接（任意聊天窗口发送后点击，或浏览器打开后"
-        "选择「在微信中打开」）——预览页会在微信内置浏览器里加载，工具自动捕获"
-        "并下载该视频。"
+        "选择「在微信中打开」）——预览页会在微信内置浏览器里自动播放视频，"
+        "请从开头连续播放，完整加载后工具校验、合并并保存；提前返回不会保存短片，"
+        "下载完成后会话自动结束。"
     )
     display.print_info(f"链接地址：{link.original}")
 

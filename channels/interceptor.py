@@ -42,13 +42,16 @@ from __future__ import annotations
 import asyncio
 import subprocess
 import sys
+import time
 from pathlib import Path
-from typing import Callable, Iterable, List, Optional
+from typing import Any, Callable, Iterable, List, Optional
 
 from channels.diagnostics import ChannelsDiagnostics
 from channels.domains import (
     DEFAULT_INTERCEPT_SUFFIXES,
+    MEDIA_URL_SUFFIXES,
     build_allow_hosts_patterns,
+    is_media_host,
     merge_suffixes,
     should_intercept_host,
 )
@@ -286,9 +289,9 @@ class SystemProxyError(RuntimeError):
 class SystemProxyManager:
     """Windows 用户级系统代理的设置与恢复。
 
-    写 ``HKCU\\...\\Internet Settings`` 的 ProxyEnable/ProxyServer/ProxyOverride
-    并用 WinINET 的 ``InternetSetOption`` 通知系统刷新。备份原值，:meth:`restore`
-    原样还原；调用方务必 ``try/finally``（嗅探会话退出路径）。
+    通过 WinINET 同步 LAN 连接代理，再通知系统刷新。备份注册表原值、
+    Connections 二进制值和 PAC/自动检测选项，:meth:`restore` 原样还原；
+    调用方务必 ``try/finally``（嗅探会话退出路径）。
     非本机地址（localhost 等）通过 ProxyOverride 排除，避免影响本项目的
     server / 其他本地服务。
 
@@ -309,6 +312,7 @@ class SystemProxyManager:
         self._backend = backend if backend is not None else WindowsProxyBackend()
         self._recovery = recovery if recovery is not None else ProxyRecovery()
         self._backup: Optional[dict] = None
+        self._applied: Optional[dict] = None
 
     @property
     def active(self) -> bool:
@@ -332,31 +336,55 @@ class SystemProxyManager:
             )
         if self._backup is not None:
             raise SystemProxyError("系统代理已由本实例接管，不能重复 enable")
-        self._backup = self._snapshot()
-        self._write(
-            {
-                "ProxyEnable": 1,
-                "ProxyServer": f"{host}:{port}",
-                "ProxyOverride": self._DEFAULT_OVERRIDE,
-            }
-        )
-        # 通知经注入的后端发出（测试替身可拦截，真实后端调 WinINET）。
-        self._backend.notify()
-        # 落盘崩溃恢复记录：到此为止若进程被强杀，下次启动可还原。
-        self._recovery.save(previous=self._backup, proxy=f"{host}:{port}")
+        backup = self._snapshot()
+        # 必须先写恢复记录，避免设置成功后崩溃却没有原始状态可恢复。
+        self._recovery.save(previous=backup, proxy=f"{host}:{port}")
+        self._backup = backup
+        try:
+            self._write(
+                {
+                    "ProxyEnable": 1,
+                    "ProxyServer": f"{host}:{port}",
+                    "ProxyOverride": self._DEFAULT_OVERRIDE,
+                }
+            )
+            self._backend.notify()
+            applied = self._snapshot()
+            self._recovery.update_applied(applied)
+            self._applied = applied
+        except OSError:
+            self.restore()
+            raise
         logger.info("系统代理已开启 -> %s:%d", host, port)
 
     def restore(self) -> None:
         """还原到 enable 前的注册表状态；幂等。"""
         if self._backup is None:
             return
-        backup, self._backup = self._backup, None
         try:
-            self._write(backup)
+            from channels.proxy_recovery import proxy_snapshot_matches
+
+            if self._applied is not None and not proxy_snapshot_matches(
+                self._snapshot(), self._applied
+            ):
+                self._recovery.clear()
+                self._backup = None
+                self._applied = None
+                logger.info("用户已修改系统代理，保留当前设置")
+                return
+            self._write(self._backup)
             self._backend.notify()
             self._recovery.clear()
+            self._backup = None
+            self._applied = None
             logger.info("系统代理已还原")
-        except OSError as exc:  # pragma: no cover - 注册表异常兜底
+        except OSError as exc:
+            # 写入可能成功而刷新失败：保留恢复记录/实例状态，允许下一次重试。
+            try:
+                self._applied = self._snapshot()
+                self._recovery.update_applied(self._applied)
+            except OSError:
+                pass
             logger.error("还原系统代理失败，请手动检查代理设置: %s", exc)
 
     def __enter__(self) -> "SystemProxyManager":
@@ -394,11 +422,13 @@ class SnifferAddon:
         allowed_suffixes: Iterable[str] = DEFAULT_INTERCEPT_SUFFIXES,
         pipeline: Optional[FeedCapturePipeline] = None,
         diagnostics: Optional[ChannelsDiagnostics] = None,
-    ):
+        replay: Optional[Any] = None,
+    ) -> None:
         self.feed_store = feed_store
         self.on_capture = on_capture
         self.allowed_suffixes = tuple(allowed_suffixes) or DEFAULT_INTERCEPT_SUFFIXES
         self.diagnostics = diagnostics or ChannelsDiagnostics()
+        self.replay = replay  # ReplayDownloadManager（直播回放全量下载）
         self.pipeline = pipeline or FeedCapturePipeline(
             feed_store, self.diagnostics, on_capture
         )
@@ -406,9 +436,88 @@ class SnifferAddon:
     def response(self, flow) -> None:
         """mitmproxy hook（同步，运行在事件循环线程内）。"""
         try:
+            self._record_media_request(flow)
+        except Exception:  # noqa: BLE001 —— 媒体记录失败绝不拖垮代理
+            pass
+        try:
             self._handle(flow)
         except Exception as exc:  # noqa: BLE001 —— 解析失败绝不拖垮代理
             logger.warning("解析视频号响应失败 %s: %s", getattr(flow.request, "pretty_host", "?"), exc)
+
+    def _record_media_request(self, flow) -> None:
+        """记录媒体分片请求的 URL 与响应头（直播回放全量下载的依据）。
+
+        只碰请求/响应**头部**，不读取响应体——媒体响应可能有几 MB，
+        读了纯浪费内存。URL 全参数保留（encfilekey/token/分段参数是
+        全量下载的关键），诊断侧环形截断。
+        """
+        request = flow.request
+        if not is_media_host(request.pretty_host or ""):
+            return
+        response = flow.response
+        if response is None:
+            return
+        range_header = ""
+        content_range = ""
+        content_type = ""
+        content_length = 0
+        try:
+            headers = request.headers
+            range_header = str(headers.get("range") or "")[:120]
+        except Exception:  # noqa: BLE001
+            range_header = ""
+        try:
+            rheaders = response.headers
+            content_range = str(rheaders.get("content-range") or "")[:160]
+            content_type = str(rheaders.get("content-type") or "")[:80]
+            length_text = str(rheaders.get("content-length") or "")
+            content_length = int(length_text) if length_text.isdigit() else 0
+        except Exception:  # noqa: BLE001
+            pass
+        self.diagnostics.record_media_request(
+            method=str(request.method or ""),
+            status=int(getattr(response, "status_code", 0) or 0),
+            range_header=range_header,
+            content_range=content_range,
+            content_type=content_type,
+            content_length=content_length,
+            url=str(request.url or ""),
+        )
+        # 直播回放检测：Content-Range 尾部 ``/TOTAL`` 给出文件总大小；
+        # 同 URL 多次分段 + 总大小超阈 → 后台全量下载（无需播放完）。
+        if self.replay is not None:
+            try:
+                import re as _re
+
+                match = _re.search(r"/(\d+)\s*$", content_range)
+                total = int(match.group(1)) if match else 0
+                if total and self.replay.consider(str(request.url or ""), total):
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(self.replay.download(str(request.url or ""), total))
+            except Exception:  # noqa: BLE001 —— 检测异常绝不拖垮代理
+                pass
+
+    # preview API 响应快照的保存目录与保留份数（本地诊断数据，仅含接口
+    # 返回的 feed 元数据，用于真机排查「提取为何为 0」一类问题）。
+    SNAPSHOT_DIR = Path("logs") / "channels_preview"
+    SNAPSHOT_KEEP = 20
+
+    def _snapshot_preview_body(self, body: str) -> None:
+        """把 getFeedInfo 响应体落盘（最多保留 SNAPSHOT_KEEP 份），失败静默。"""
+        try:
+            snap_dir = Path(self.SNAPSHOT_DIR)
+            snap_dir.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime("%Y%m%d_%H%M%S")
+            path = snap_dir / f"get_feed_info_{stamp}_{int(time.time() * 1000) % 1000:03d}.json"
+            path.write_text(body, encoding="utf-8")
+            snaps = sorted(snap_dir.glob("get_feed_info_*.json"))
+            for old in snaps[: max(0, len(snaps) - self.SNAPSHOT_KEEP)]:
+                try:
+                    old.unlink()
+                except OSError:
+                    pass
+        except Exception:  # noqa: BLE001 —— 快照是纯诊断辅助，绝不影响代理
+            pass
 
     def _handle(self, flow) -> None:
         request = flow.request
@@ -440,7 +549,16 @@ class SnifferAddon:
         # 数据标记：objectDesc（普通页）或 videoUrl（分享链接预览页的
         # sceneInfo 模式，见 channels.feed.extract_preview_feeds）。
         has_feed_marker = "objectDesc" in body or "videoUrl" in body
-        if "json" in content_type or has_feed_marker:
+        # preview 页数据接口（getFeedInfo）是分享链接链路的唯一 HTTP 数据
+        # 源，且响应结构多次改版（videoUrl → sceneInfo.dynamicExportId），
+        # 不设标记门槛直接解析；同时快照落盘供真机排查提取问题。
+        is_preview_api = (
+            "/finder-preview/api/" in request.path
+            or "get_feed_info" in request.path
+        )
+        if is_preview_api:
+            self._snapshot_preview_body(body)
+        if "json" in content_type or has_feed_marker or is_preview_api:
             try:
                 payload = json.loads(body)
             except json.JSONDecodeError:
@@ -448,7 +566,7 @@ class SnifferAddon:
             self.diagnostics.incr("json_responses")
         if payload is None:
             return
-        if not has_feed_marker:
+        if not has_feed_marker and not is_preview_api:
             return
         if "objectDesc" in body:
             self.diagnostics.incr("object_desc_responses")
@@ -492,6 +610,8 @@ class ChannelsInterceptor:
         task_hub: Optional[object] = None,
         inject_enabled: bool = True,
         patch_registry: Optional[PatchRegistry] = None,
+        mse_store: Optional[object] = None,
+        replay: Optional[object] = None,
     ):
         if not mitmproxy_available():  # pragma: no cover - 环境缺依赖
             raise RuntimeError(MITMPROXY_INSTALL_HINT)
@@ -507,9 +627,12 @@ class ChannelsInterceptor:
             feed_store, self.diagnostics, on_capture
         )
         self.task_hub = task_hub
+        self.mse_store = mse_store
+        self.replay = replay
         self.inject_enabled = inject_enabled
         self.patch_registry = patch_registry or PatchRegistry(diagnostics=self.diagnostics)
         self._master = None
+        self._virtual_host = None
         self._task: Optional[asyncio.Task] = None
 
     @property
@@ -529,7 +652,9 @@ class ChannelsInterceptor:
         ``allow_hosts`` 是 mitmproxy 的连接级白名单：SNI / Host 头不匹配任何
         模式的连接被当作 TCP 隧道原样转发（tunnel），**不做 TLS 解密**——
         这是「非目标域名 passthrough」的实现基础。白名单见
-        :mod:`channels.domains`。
+        :mod:`channels.domains`。媒体分片 CDN（MEDIA_URL_SUFFIXES）也被
+        解密：只读取分片 URL 与响应头（直播回放全量下载的依据），响应体
+        不做任何解析。
         """
         from mitmproxy import options
 
@@ -537,7 +662,11 @@ class ChannelsInterceptor:
             listen_host=host,
             listen_port=port,
             confdir=confdir,
-            allow_hosts=list(build_allow_hosts_patterns(allowed_suffixes)),
+            allow_hosts=list(
+                build_allow_hosts_patterns(
+                    tuple(allowed_suffixes) + MEDIA_URL_SUFFIXES
+                )
+            ),
         )
 
     async def start(self) -> None:
@@ -562,6 +691,7 @@ class ChannelsInterceptor:
                 self.feed_store, on_capture=self.on_capture,
                 allowed_suffixes=self.allowed_suffixes,
                 pipeline=self.pipeline, diagnostics=self.diagnostics,
+                replay=self.replay,
             )
         )
         master.addons.add(
@@ -572,14 +702,14 @@ class ChannelsInterceptor:
                 patch_registry=self.patch_registry,
             )
         )
-        master.addons.add(
-            VirtualHostAddon(
-                self.pipeline,
-                self.diagnostics,
-                allowed_suffixes=self.allowed_suffixes,
-                task_hub=self.task_hub,
-            )
+        self._virtual_host = VirtualHostAddon(
+            self.pipeline,
+            self.diagnostics,
+            allowed_suffixes=self.allowed_suffixes,
+            task_hub=self.task_hub,
+            mse_store=self.mse_store,
         )
+        master.addons.add(self._virtual_host)
         self._master = master
         self._task = asyncio.create_task(master.run(), name="channels-mitmproxy")
         try:
@@ -647,6 +777,9 @@ class ChannelsInterceptor:
         )
 
     async def stop(self) -> None:
+        virtual_host, self._virtual_host = self._virtual_host, None
+        if virtual_host is not None:
+            await virtual_host.aclose()
         task, self._task = self._task, None
         master, self._master = self._master, None
         if master is not None:

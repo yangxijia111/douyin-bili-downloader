@@ -82,6 +82,20 @@ def test_short_url_detection_and_normalization():
     assert is_bili_short_url("https://www.bilibili.com/video/BV1GJ411x7h7") is False
 
 
+@pytest.mark.parametrize("url", [
+    "b23.tv/abc", "acg.tv/abc", "space.bilibili.com/271779326/video",
+    "www.bilibili.com/video/BV1GJ411x7h7?p=2",
+])
+def test_scheme_less_links_route_and_parse_consistently(url):
+    assert detect_platform(url) == "bilibili"
+    assert BiliURLParser.parse(url) is not None
+
+
+def test_av_video_build_preserves_selected_page():
+    parsed = BiliURLParser.parse("https://www.bilibili.com/video/av170001?p=2")
+    assert BiliURLParser.build_url(parsed) == "https://www.bilibili.com/video/av170001?p=2"
+
+
 def test_parse_video_with_page():
     parsed = BiliURLParser.parse("https://www.bilibili.com/video/BV1GJ411x7h7?p=3")
     assert parsed["type"] == "video"

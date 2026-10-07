@@ -119,10 +119,12 @@ class ChannelsTaskHub:
         )
         self._records[record.task_id] = record
         self._active_by_feed[feed.dedup_key] = record.task_id
+        self.stats.total += 1
         self._trim()
         record.task = asyncio.get_event_loop().create_task(
             self._run(record, feed), name=f"channels-task-{record.task_id}"
         )
+        record.task.add_done_callback(lambda task: self._task_finished(record, feed, task))
         return record.task_id
 
     def status(self, task_id: str) -> Optional[Dict[str, Any]]:
@@ -150,13 +152,13 @@ class ChannelsTaskHub:
 
     async def _run(self, record: TaskRecord, feed: ChannelFeed) -> None:
         record.status = "downloading"
-        self.store.set_status(feed, "downloading")
+        if record.action != "cover":
+            self.store.set_status(feed, "downloading")
         try:
             if record.action == "cover":
                 paths = await self.downloader.download_cover(feed)
                 record.status = "done"
-                record.paths = list(paths)
-                self.store.set_status(feed, "done", downloaded_paths=paths)
+                record.paths = [str(path) for path in paths]
                 self.stats.success += 1
                 self._release(record)
                 return
@@ -167,14 +169,15 @@ class ChannelsTaskHub:
             record.status = "stopped"
             record.error = "已手动停止"
             # 直播部分文件已由 downloader 登记；普通视频取消不落盘。
-            if feed.status == "downloading":
+            if record.action != "cover" and feed.status == "downloading":
                 self.store.set_status(feed, "pending")
             self._release(record)
             raise
         except Exception as exc:  # noqa: BLE001 —— 任务失败不拖垮会话
             record.status = "failed"
             record.error = str(exc)[:300]
-            self.store.set_status(feed, "failed", error=record.error)
+            if record.action != "cover":
+                self.store.set_status(feed, "failed", error=record.error)
             self.stats.failed += 1
             self._release(record)
             return
@@ -188,7 +191,23 @@ class ChannelsTaskHub:
             self.stats.success += 1
         elif status == "failed":
             self.stats.failed += 1
+        elif status == "skipped":
+            self.stats.skipped += 1
         self._release(record)
+
+    def _task_finished(
+        self, record: TaskRecord, feed: ChannelFeed, task: asyncio.Task
+    ) -> None:
+        # 在协程第一次运行前被取消时，_run 的 CancelledError 分支不会执行。
+        # 回调必须释放去重锁并更新终态，避免永久 queued、无法重新下载。
+        if task.cancelled() and record.status in ("queued", "downloading"):
+            record.status = "stopped"
+            record.error = "已手动停止"
+            if record.action != "cover" and feed.status == "downloading":
+                self.store.set_status(feed, "pending")
+        key = feed.dedup_key
+        if self._active_by_feed.get(key) == record.task_id:
+            self._active_by_feed.pop(key, None)
 
     def _release(self, record: TaskRecord) -> None:
         feed = self.store.get(record.feed_id)

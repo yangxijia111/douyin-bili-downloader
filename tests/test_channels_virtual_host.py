@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -64,7 +65,7 @@ def _feed_flow(nodes, *, strategy: str = "page_network_hook", page: str = "home"
 
 
 def _addon(store: FeedStore | None = None, diagnostics: ChannelsDiagnostics | None = None,
-           task_hub=None) -> VirtualHostAddon:
+           task_hub=None, mse_store=None) -> VirtualHostAddon:
     # 注意：不能用 `store or FeedStore()`——FeedStore 定义了 __len__，
     # 空 store 是 falsy，会每次都新建一个。
     if store is None:
@@ -75,10 +76,113 @@ def _addon(store: FeedStore | None = None, diagnostics: ChannelsDiagnostics | No
     return VirtualHostAddon(
         pipeline, diagnostics,
         allowed_suffixes=("weixin.qq.com",), task_hub=task_hub,
+        mse_store=mse_store,
     )
 
 
 class TestFeedBridge:
+    def test_bridge_has_safe_quality_options_and_original_capability(self):
+        addon = _addon()
+        node = _node("a")
+        media = node["objectDesc"]["media"][0]
+        media["fullUrl"] = "https://finder.video.qq.com/original.mp4?token=secret"
+        media["spec"] = [
+            {"fileFormat": "hd", "width": 1920, "height": 1080, "url": "https://cdn/hd?token=secret"},
+            {"fileFormat": "bad&token=secret", "width": 3840, "height": 2160},
+        ]
+        flow = _feed_flow([node])
+        addon.request(flow)
+        view = flow.response.json()["feeds"][0]
+        assert view["has_original"] is True
+        assert "format:hd" in [o["value"] for o in view["quality_options"]]
+        assert "hd" in view["qualities"]
+        assert all(set(o) == {"value", "label", "width", "height"} for o in view["quality_options"])
+        assert "secret" not in json.dumps(view)
+
+    def test_replay_page_receives_existing_capability_without_requeueing_profile_capture(self):
+        store = FeedStore()
+        diagnostics = ChannelsDiagnostics()
+        on_capture = Mock()
+        pipeline = FeedCapturePipeline(store, diagnostics, on_capture=on_capture)
+        addon = VirtualHostAddon(pipeline, diagnostics)
+        profile = _feed_flow([_node("replay")], page="profile")
+        addon.request(profile)
+        assert profile.response.json()["accepted"] == 1
+        store.clear_new_event()
+
+        duplicate = _node("replay")
+        duplicate["id"] = duplicate.pop("objectId")
+        duplicate.pop("objectNonceId")
+        duplicate["objectDesc"]["media"][0]["url"] = "https://cdn/replay.mp4?token=secret"
+        replay = _feed_flow([duplicate, duplicate], strategy="page_runtime_hook", page="feed")
+        addon.request(replay)
+        payload = replay.response.json()
+
+        assert payload["accepted"] == 0
+        assert len(payload["feeds"]) == 1
+        view = payload["feeds"][0]
+        assert view["object_id"] == "replay"
+        assert view["has_url"] is True
+        assert view["has_decode_key"] is True
+        assert "url" not in view and "decode_key" not in view
+        assert "token=secret" not in json.dumps(payload)
+        assert len(store) == 1
+        assert store.has_new is False
+        assert diagnostics.get("parsed_feeds") == 1
+        on_capture.assert_called_once()
+
+    def test_embedded_id_only_returns_downloadable_view(self):
+        store = FeedStore()
+        diagnostics = ChannelsDiagnostics()
+        addon = _addon(store, diagnostics)
+        node = _node("14990527163746486645")
+        node["id"] = node.pop("objectId")
+        node.pop("objectNonceId")
+        flow = _feed_flow([node], strategy="page_runtime_hook")
+        addon.request(flow)
+        payload = flow.response.json()
+        assert payload["accepted"] == 1
+        assert payload["feeds"][0]["object_id"] == "14990527163746486645"
+        assert payload["feeds"][0]["has_url"] is True
+        assert store.get("14990527163746486645").decode_key == 123
+        assert diagnostics.strategy_stats() == {"page_runtime_hook": 1}
+
+    def test_generic_id_has_no_downloadable_view(self):
+        addon = _addon()
+        flow = _feed_flow([{"id": "14990527163746486645", "url": "https://cdn/a.mp4"}])
+        addon.request(flow)
+        assert flow.response.json()["accepted"] == 0
+        assert flow.response.json()["feeds"] == []
+
+    def test_unparsed_node_cannot_fetch_capability_of_an_existing_feed_by_id(self):
+        store = FeedStore()
+        addon = _addon(store)
+        addon.request(_feed_flow([_node("existing")], page="profile"))
+        flow = _feed_flow([{"id": "existing", "url": "https://cdn/arbitrary.mp4"}], page="feed")
+        addon.request(flow)
+        payload = flow.response.json()
+        assert payload["accepted"] == 0
+        assert payload["feeds"] == []
+        assert len(store) == 1
+
+    def test_duplicate_valid_preview_node_keeps_its_existing_capability_view(self):
+        store = FeedStore()
+        diagnostics = ChannelsDiagnostics()
+        addon = _addon(store, diagnostics)
+        node = {"id": "preview", "videoUrl": "https://cdn/preview.mp4?token=secret"}
+        first = _feed_flow([node], page="preview")
+        addon.request(first)
+        assert first.response.json()["accepted"] == 1
+        repeated = _feed_flow([node], page="feed")
+        addon.request(repeated)
+        payload = repeated.response.json()
+        assert payload["accepted"] == 0
+        assert len(payload["feeds"]) == 1
+        assert payload["feeds"][0]["object_id"] == "preview"
+        assert payload["feeds"][0]["has_url"] is True
+        assert "token=secret" not in json.dumps(payload)
+        assert diagnostics.get("parsed_feeds") == 1
+
     def test_happy_path(self):
         store = FeedStore()
         diagnostics = ChannelsDiagnostics()
@@ -211,8 +315,64 @@ class TestHeartbeat:
         addon.request(flow)
         assert flow.response.status_code == 400
 
+    def test_heartbeat_returns_mse_auto_save_flag(self):
+        """v2.0.4：心跳响应下发 MSE 自动保存开关（页面据此决定自动上传）。"""
+        from types import SimpleNamespace as NS
+
+        body = json.dumps({"page": "feed"}).encode()
+        headers = {
+            "Content-Type": "application/json",
+            "Origin": f"https://{_HOST}",
+        }
+
+        # 有 mse_store：透传其 auto_save 属性（True 与 False 两种状态）。
+        for flag in (True, False):
+            addon = _addon(mse_store=NS(auto_save=flag))
+            flow = _flow("POST", "/__cuin/heartbeat", body=body, headers=headers)
+            addon.request(flow)
+            assert flow.response.status_code == 200
+            assert flow.response.json()["mse_auto_save"] is flag
+
+        # 无 mse_store：开关为 False（页面不应自动上传）。
+        addon = _addon()
+        flow = _flow("POST", "/__cuin/heartbeat", body=body, headers=headers)
+        addon.request(flow)
+        assert flow.response.status_code == 200
+        assert flow.response.json()["mse_auto_save"] is False
+
 
 class TestTaskEndpoints:
+    @pytest.mark.parametrize("quality", ["highest", "lowest", "original", "1080p", "720p", "format:" + "x" * 128])
+    def test_submit_accepts_safe_quality_and_full_format_length(self, quality):
+        hub = Mock()
+        hub.submit.return_value = "task123"
+        addon = _addon(task_hub=hub)
+        flow = _flow(
+            "POST", "/__cuin/task",
+            body=json.dumps({"feed_id": "x", "action": "download", "quality": quality}).encode(),
+            headers={"Content-Type": "application/json", "Origin": f"https://{_HOST}"},
+        )
+        addon.request(flow)
+        assert flow.response.status_code == 200
+        hub.submit.assert_called_once_with("x", action="download", quality=quality)
+
+    @pytest.mark.parametrize("quality", [
+        "https://finder.video.qq.com/v.mp4", "format:hd&token=secret", "format:",
+        "format:" + "x" * 129, "highest?token=secret", "1080p/../", "format:中文", 1080,
+    ])
+    def test_submit_rejects_unsafe_quality_without_queueing(self, quality):
+        hub = Mock()
+        addon = _addon(task_hub=hub)
+        flow = _flow(
+            "POST", "/__cuin/task",
+            body=json.dumps({"feed_id": "x", "action": "download", "quality": quality}).encode(),
+            headers={"Content-Type": "application/json", "Origin": f"https://{_HOST}"},
+        )
+        addon.request(flow)
+        assert flow.response.status_code == 400
+        assert flow.response.json()["error"] == "bad quality"
+        hub.submit.assert_not_called()
+
     def test_submit_without_hub_returns_503(self):
         addon = _addon()
         flow = _flow(

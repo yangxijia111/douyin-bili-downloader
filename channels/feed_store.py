@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 from typing import Dict, Iterable, List, Optional
 
-from channels.feed import ChannelFeed
+from channels.feed import ChannelFeed, _spec_format
 
 __all__ = ["FeedStore"]
 
@@ -40,6 +40,7 @@ class FeedStore:
                 # 重复刷到：只刷新时效字段（直链签名参数是新的），状态保持
                 # 不变——已完成的不会重复入队。
                 existing.url = feed.url or existing.url
+                existing.full_url = feed.full_url or existing.full_url
                 if feed.decode_key:
                     existing.decode_key = feed.decode_key
                 if feed.images:
@@ -47,7 +48,34 @@ class FeedStore:
                 if feed.bgm_url:
                     existing.bgm_url = feed.bgm_url
                 if feed.specs:
-                    existing.specs = feed.specs
+                    # 页面运行时有时只重报当前规格。按 format 合并，保留之前
+                    # 已捕获的高档；同档的新参数覆盖旧值，下载用最新签名 URL。
+                    merged = {
+                        _spec_format(spec): dict(spec)
+                        for spec in existing.specs
+                        if isinstance(spec, dict) and _spec_format(spec)
+                    }
+                    for spec in feed.specs:
+                        if not isinstance(spec, dict):
+                            continue
+                        format_id = _spec_format(spec)
+                        if format_id:
+                            merged.setdefault(format_id, {}).update(spec)
+                    existing.specs = list(merged.values())
+                if feed.width > 0 or feed.height > 0:
+                    existing.width, existing.height = feed.width, feed.height
+                # The first bridge callback can contain only an ID/URL; later
+                # captures supply the original duration used to validate MSE.
+                # Never replace a known full duration with a short preview.
+                if feed.duration > 0:
+                    existing.duration = max(existing.duration, feed.duration)
+                if feed.file_size > 0:
+                    existing.file_size = feed.file_size
+                for field in ("title", "author_name", "author_id", "cover_url", "create_time"):
+                    if not getattr(existing, field) and getattr(feed, field):
+                        setattr(existing, field, getattr(feed, field))
+                if existing.title == existing.object_id and feed.title:
+                    existing.title = feed.title
                 continue
             self._feeds[key] = feed
             self._id_index[feed.feed_id] = key

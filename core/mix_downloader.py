@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from core.api_client import LoginRequiredError
 from core.downloader_base import BaseDownloader, DownloadResult
 from core.user_modes.base_strategy import BaseUserModeStrategy
 from utils.logger import setup_logger
@@ -130,6 +131,8 @@ class MixDownloader(BaseDownloader):
             return None
         try:
             return await getter(mix_id)
+        except LoginRequiredError:
+            raise
         except Exception as exc:
             logger.warning("Get mix detail failed: %s", exc)
             return None

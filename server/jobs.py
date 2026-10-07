@@ -9,6 +9,7 @@ import asyncio
 import time
 import uuid
 from contextvars import ContextVar
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
@@ -110,10 +111,11 @@ class DownloadJob:
 
     def progress_percent(self) -> Optional[int]:
         """0-100，未知总数时返回 None（前端显示不确定态进度条）。"""
-        if self.status in JobStatus.TERMINAL:
+        if self.status == JobStatus.SUCCESS:
             return 100
         if self.total > 0:
-            return max(0, min(99, int(self.processed * 100 / self.total)))
+            maximum = 100 if self.status in JobStatus.TERMINAL else 99
+            return max(0, min(maximum, int(self.processed * 100 / self.total)))
         return None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -140,6 +142,7 @@ class DownloadJob:
             "author_sec_uid": self.author_sec_uid,
             "output_dirs": list(self.output_dirs),
             "paused": self.paused,
+            "cancel_requested": self.cancel_requested,
             "progress_percent": self.progress_percent(),
             "duration_seconds": self.duration_seconds(),
         }
@@ -173,17 +176,30 @@ class JobManager:
         self._jobs: Dict[str, DownloadJob] = {}
         # 惰性原语：py<=3.10 构造期急切绑定事件循环，asyncio.run 之后再
         # 构造会直接 RuntimeError（CI py3.9 实测）。首次使用时再创建。
-        self._semaphore: Optional[asyncio.Semaphore] = None
+        self._capacity_event: Optional[asyncio.Event] = None
+        self._active_jobs = 0
         self._lock: Optional[asyncio.Lock] = None
         self._max_concurrency = max(1, int(max_concurrency))
         self.max_jobs = max(1, int(max_jobs))
         self.job_ttl_seconds = max(0.0, float(job_ttl_seconds))
 
     @property
-    def _sem(self) -> asyncio.Semaphore:
-        if self._semaphore is None:
-            self._semaphore = asyncio.Semaphore(self._max_concurrency)
-        return self._semaphore
+    def _capacity_changed(self) -> asyncio.Event:
+        if self._capacity_event is None:
+            self._capacity_event = asyncio.Event()
+        return self._capacity_event
+
+    async def _acquire_capacity(self, job: DownloadJob) -> None:
+        # Recheck the current limit after each wake-up, including queued jobs
+        # created before a settings change. All state changes are synchronous
+        # on one event loop, so no await separates the check and reservation.
+        while True:
+            await job.wait_if_paused()
+            if self._active_jobs < self._max_concurrency:
+                self._active_jobs += 1
+                return
+            self._capacity_changed.clear()
+            await self._capacity_changed.wait()
 
     @property
     def sync_lock(self) -> asyncio.Lock:
@@ -196,7 +212,7 @@ class JobManager:
     ) -> DownloadJob:
         job_id = uuid.uuid4().hex[:12]
         job = DownloadJob(job_id=job_id, url=url)
-        job.overrides = overrides or None
+        job.overrides = deepcopy(overrides) if overrides else None
         async with self.sync_lock:
             self._prune_locked()
             self._jobs[job_id] = job
@@ -235,8 +251,11 @@ class JobManager:
 
     async def _run(self, job: DownloadJob) -> None:
         token = CURRENT_JOB.set(job)
+        acquired = False
         try:
-            async with self._sem:
+            await self._acquire_capacity(job)
+            acquired = True
+            if not job.cancel_requested:
                 job.status = JobStatus.RUNNING
                 job.started_at = _now_iso()
                 job.started_monotonic = time.monotonic()
@@ -256,6 +275,8 @@ class JobManager:
                     job.processed = job.success + job.failed + job.skipped
                     # 只要跑完就是 success；具体成功/失败个数通过字段区分
                     job.status = JobStatus.SUCCESS if job.failed == 0 else JobStatus.FAILED
+                    if job.failed:
+                        job.error = f"有 {job.failed} 个作品下载失败，请查看详情后重试"
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -267,6 +288,12 @@ class JobManager:
             job.status = JobStatus.CANCELLED
             job.error = job.error or "已取消"
         finally:
+            if acquired:
+                self._active_jobs -= 1
+                self._capacity_changed.set()
+            if job.cancel_requested:
+                job.status = JobStatus.CANCELLED
+                job.error = job.error or "已取消"
             if job.status not in JobStatus.TERMINAL:
                 job.status = JobStatus.CANCELLED
                 job.error = job.error or "已取消"
@@ -286,15 +313,14 @@ class JobManager:
             return list(self._jobs.values())
 
     def set_max_concurrency(self, value: int) -> None:
-        """Swap the worker semaphore so a settings change applies live.
+        """Apply the new limit to running and already-queued jobs.
 
         Existing in-flight jobs keep their slot until they finish; only the
         number of *new* jobs allowed to start in parallel changes.
         """
-        # 置空让下一次使用按新并发数重建（set_max_concurrency 本身可能运行
-        # 在无事件循环的同步上下文里）。
-        self._semaphore = None
         self._max_concurrency = max(1, int(value))
+        if self._capacity_event is not None:
+            self._capacity_event.set()
 
     async def cancel(self, job_id: str) -> Optional[DownloadJob]:
         """Stop a queued or running job. Returns the job, or None if unknown."""
@@ -302,24 +328,26 @@ class JobManager:
             job = self._jobs.get(job_id)
         if job is None:
             return None
+        if job.status in JobStatus.TERMINAL:
+            return job
         job.cancel_requested = True
         # 必须先解除暂停：暂停中的 job 正卡在 gate 上，不放开的话
         # task.cancel() 也会等它先返回，取消看起来像没反应。
         job.resume()
-        if job.status in JobStatus.TERMINAL:
-            return job
         if job._task is not None and not job._task.done():
             job._task.cancel()
             # 等任务真正收尾再返回，否则调用方（HTTP 处理器）拿到的是还没
             # 翻成 cancelled 的旧状态，按钮点下去像没反应。5 秒上限只是
             # 防御——CancelledError 会在下一个 await 点立刻抛出。
             try:
-                await asyncio.wait_for(job._task, timeout=5.0)
+                await asyncio.wait_for(asyncio.shield(job._task), timeout=5.0)
             except (asyncio.CancelledError, asyncio.TimeoutError):
                 pass
             except Exception:  # noqa: BLE001 - 任务自身的失败已经记在 job 上
                 pass
-        else:
+        if job._task is None or job._task.done():
+            # Cancellation before _run first executes never enters its finally.
+            # Finalize here as well so an immediately-cancelled job is terminal.
             job.status = JobStatus.CANCELLED
             job.error = job.error or "已取消"
             job.finished_at = _now_iso()
@@ -379,7 +407,19 @@ class JobManager:
         return job
 
     async def shutdown(self) -> None:
-        """等待所有 pending/running 任务结束。"""
+        """取消未完成任务，避免暂停中的任务阻止服务退出。"""
+        for job in self._jobs.values():
+            if job.status not in JobStatus.TERMINAL:
+                job.cancel_requested = True
+                job.resume()
+                if job._task is not None:
+                    job._task.cancel()
         tasks = [j._task for j in self._jobs.values() if j._task is not None]
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        for job in self._jobs.values():
+            if job.status not in JobStatus.TERMINAL:
+                job.status = JobStatus.CANCELLED
+                job.error = "已取消"
+                job.finished_at = _now_iso()
+                job.finished_monotonic = time.monotonic()

@@ -21,7 +21,7 @@
         throw new Error("尚未识别当前视频，请播放视频 1–2 秒或切换一次视频");
       }
       var parts = String(actionId).split(":");
-      return api.requestDownload(view, parts[0], parts[1] || null);
+      return api.requestDownload(view, parts[0], parts.slice(1).join(":") || null);
     });
   }
 

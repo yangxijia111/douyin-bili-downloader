@@ -95,7 +95,7 @@ def is_bilibili_url(url: str) -> bool:
     if _BARE_BVID_RE.match(candidate) or _BARE_AVID_RE.match(candidate):
         return True
 
-    host = (urlparse(candidate).hostname or "").lower()
+    host = (urlparse(normalize_short_url(candidate)).hostname or "").lower()
     if not host:
         return False
     return any(_host_matches(host, suffix) for suffix in _CONTENT_HOST_SUFFIXES) or any(
@@ -143,7 +143,7 @@ class BiliURLParser:
             result.update(type="video", aid=bare_av.group(1))
             return result
 
-        parsed = urlparse(raw)
+        parsed = urlparse(normalize_short_url(raw))
         host = (parsed.hostname or "").lower()
         path = parsed.path or ""
         query = parse_qs(parsed.query)
@@ -252,7 +252,9 @@ class BiliURLParser:
                 page = parsed.get("page")
                 return f"{base}?p={page}" if page else base
             if parsed.get("aid"):
-                return f"https://www.bilibili.com/video/av{parsed['aid']}"
+                base = f"https://www.bilibili.com/video/av{parsed['aid']}"
+                page = parsed.get("page")
+                return f"{base}?p={page}" if page else base
             return ""
         if url_type == "user":
             return f"https://space.bilibili.com/{parsed.get('mid')}/video"

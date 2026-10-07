@@ -18,9 +18,26 @@ pytest-asyncio 提供自己的循环，不受影响。3.11+ 上为空操作。
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import sys
 
 import pytest
+
+
+@pytest.fixture(scope="session")
+def channels_real_mp4(tmp_path_factory):
+    """Small real fMP4 with video+audio, for capture and decode regression tests."""
+    import imageio_ffmpeg
+
+    path = tmp_path_factory.mktemp("channels-media") / "source.mp4"
+    subprocess.run([
+        imageio_ffmpeg.get_ffmpeg_exe(), "-hide_banner", "-loglevel", "error",
+        "-f", "lavfi", "-i", "testsrc2=size=96x64:rate=10",
+        "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100",
+        "-t", "2", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac",
+        "-movflags", "frag_keyframe+empty_moov+default_base_moof", str(path),
+    ], check=True, capture_output=True)
+    return path
 
 
 @pytest.fixture(autouse=True)

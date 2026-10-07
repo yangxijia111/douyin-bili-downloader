@@ -77,7 +77,7 @@ class TestFixtures:
         url_low = pick_quality_url(feed, "lowest")
         assert "X-snsvideoflag=sd" in url_low
         highest = pick_quality_url(feed, "highest")
-        assert "X-snsvideoflag" not in highest
+        assert "X-snsvideoflag=hd" in highest  # 最高必须明确选择已捕获的 1080p 档。
 
     def test_missing_fields_fallbacks(self):
         feed = _one("missing_fields.json")

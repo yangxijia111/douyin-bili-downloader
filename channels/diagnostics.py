@@ -25,13 +25,22 @@ v2.0.1 的真实缺陷：Windows 微信里「嗅探会话启动、证书/系统�
     C  html_pages_seen > 0 且 injected_pages = 0    页面看到了但注入失败
     D  injected_pages > 0 且 frontend_heartbeat = 0 脚本写入了但没执行（CSP）
     E  frontend_heartbeat > 0 且 parsed_feeds = 0   按钮在跑但数据规则失效
+       （v2.0.4：MSE 时代 feed 不走页面流量，此态为常态——MSE 分片自动
+        保存会经 record_feeds 推动 parsed_feeds / 「下载成功」计数）
     F  parsed_feeds > 0 但下载失败                 CDN / decodeKey / ISAAC64
 """
 
 from __future__ import annotations
 
+import ipaddress
+import math
+import re
 import time
+from copy import deepcopy
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
+
+from channels.domains import normalize_host
 
 __all__ = [
     "COUNTER_KEYS",
@@ -56,6 +65,8 @@ COUNTER_KEYS: tuple = (
 
 # 额外的辅助计数器（定位 Strategy B/C/D 与按钮细节，不喧宾夺主）。
 _EXTRA_KEYS: tuple = (
+    "connect_requests",
+    "tls_client_failures",
     "buttons_created",
     "feed_bridge_requests",
     "feed_bridge_rejected",
@@ -63,6 +74,14 @@ _EXTRA_KEYS: tuple = (
     "patch_applied",
     "patch_failures",
     "virtual_asset_requests",
+    # MSE 分片旁路（Strategy E，v2.0.4）：页面 appendBuffer 捕获。
+    "mse_capture_streams",
+    "mse_capture_bytes",
+    # 媒体分片 URL 记录（直播回放全量下载的依据，2026-09-25）。
+    "media_requests",
+    "media_request_bytes",
+    # 直播回放全量下载（replay_downloader）：解密拼装成功落盘数。
+    "replay_downloads",
 )
 
 # 状态阶梯 → 人类可读标签（Web 状态链按此顺序渲染）。
@@ -81,11 +100,139 @@ _LEVEL_OK = "ok"
 _LEVEL_WARN = "warn"
 _LEVEL_ERROR = "error"
 
+_JS_SAFE_INTEGER = 9007199254740991
+_PROBE_REASON_CODES = frozenset((
+    "pending_source_end", "missing_initialization", "truncated", "missing_duration",
+    "missing_start", "coverage_gap", "missing_end", "no_video", "complete",
+))
+
+
+def _probe_integer(value: Any, maximum: int = _JS_SAFE_INTEGER) -> int:
+    if isinstance(value, bool):
+        return 0
+    try:
+        return min(maximum, max(0, int(value)))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _probe_seconds(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        number = float(value)
+    except OverflowError:
+        return None
+    return number if math.isfinite(number) and 0 <= number <= 604800 else None
+
+
+def _probe_ranges(value: Any) -> List[List[float]]:
+    result: List[List[float]] = []
+    if not isinstance(value, (list, tuple)):
+        return result
+    for pair in value[:64]:
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            continue
+        start, end = (_probe_seconds(item) for item in pair)
+        if start is not None and end is not None and start <= end:
+            result.append([start, end])
+            if len(result) == 16:
+                break
+    return result
+
+
+def _probe_names(value: Any, maximum: int) -> List[str]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [
+        name for name in value[:maximum]
+        if isinstance(name, str) and re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_.$]{0,63}", name)
+    ]
+
+
+def _probe_mime(value: Any) -> str:
+    if isinstance(value, str) and len(value) <= 160 and re.fullmatch(
+        r"(?:audio|video)/[a-z0-9.+-]+(?:;[a-z0-9 ._,=\"'-]+)?", value, re.IGNORECASE
+    ):
+        return value
+    return ""
+
+
+def _probe_reason(value: Any) -> str:
+    return value if isinstance(value, str) and value in _PROBE_REASON_CODES else ""
+
+
+def _clean_probe(probe: Dict[str, Any]) -> Dict[str, Any]:
+    page_id = probe.get("page_id")
+    visibility = probe.get("visibility")
+    result = {
+        "page_id": page_id if isinstance(page_id, str) and re.fullmatch(
+            r"[A-Za-z0-9_-]{1,64}", page_id
+        ) else "",
+        "visibility": visibility if visibility in ("visible", "hidden", "prerender") else "",
+        "hooked": _probe_names(probe.get("hooked"), 16),
+        "fetch_hooked": bool(probe.get("fetch_hooked")),
+        "xhr_hooked": bool(probe.get("xhr_hooked")),
+        "index_size": _probe_integer(probe.get("index_size"), 1000000),
+        "view_size": _probe_integer(probe.get("view_size"), 1000000),
+        "window_keys": _probe_names(probe.get("window_keys"), 60),
+        "video": None,
+        "mse": None,
+    }
+    video = probe.get("video")
+    if isinstance(video, dict):
+        result["video"] = {
+            "current_time": _probe_seconds(video.get("current_time")),
+            "duration": _probe_seconds(video.get("duration")),
+            "ready_state": _probe_integer(video.get("ready_state"), 4),
+            "network_state": _probe_integer(video.get("network_state"), 3),
+            "paused": bool(video.get("paused")),
+            "ended": bool(video.get("ended")),
+            "buffered": _probe_ranges(video.get("buffered")),
+            "src_kind": video.get("src_kind") if video.get("src_kind") in (
+                "blob", "http", "none"
+            ) else "none",
+        }
+    mse = probe.get("mse")
+    if isinstance(mse, dict):
+        tracks = []
+        values = mse.get("tracks")
+        for track in values[:8] if isinstance(values, (list, tuple)) else ():
+            if not isinstance(track, dict):
+                continue
+            tracks.append({
+                "mime": _probe_mime(track.get("mime")),
+                "bytes": _probe_integer(track.get("bytes")),
+                "duration": _probe_seconds(track.get("duration")),
+                "ranges": _probe_ranges(track.get("ranges")),
+                "truncated": bool(track.get("truncated")),
+                "source_finished": bool(track.get("source_finished")),
+                "initialized": bool(track.get("initialized")),
+                "complete": bool(track.get("complete")),
+                "reason_code": _probe_reason(track.get("reason_code")),
+            })
+        result["mse"] = {
+            name: _probe_integer(mse.get(name)) for name in (
+                "streams", "total_bytes", "truncated", "current_bytes",
+            )
+        }
+        result["mse"].update({
+            "current_mime": _probe_mime(mse.get("current_mime")),
+            "complete": bool(mse.get("complete")),
+            "reason_code": _probe_reason(mse.get("reason_code")),
+            "tracks": tracks,
+        })
+    return result
+
 
 class ChannelsDiagnostics:
     """嗅探链路的计数器集合 + 分级评估（单事件循环内使用，无线锁）。"""
 
     def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        """原地清除上一会话的证据，保持补丁/捕获策略持有的诊断引用有效。"""
         now = time.time()
         self._counters: Dict[str, int] = {
             key: 0 for key in COUNTER_KEYS + _EXTRA_KEYS
@@ -98,9 +245,15 @@ class ChannelsDiagnostics:
         self._last_page_url: str = ""
         # 最近一次前端运行时探针（属性名/计数，无用户数据）。
         self._last_probe: Dict[str, Any] = {}
+        self._page_probes: Dict[str, Dict[str, Any]] = {}
         # 最近命中的白名单域响应路径（不含查询串；有界环形缓冲，仅用于
         # 真机诊断「数据到底从哪个接口来」——不记录任何正文/参数）。
         self._candidate_paths: List[str] = []
+        # 连接证据只包含主机名与来源，绝不保存路径、查询参数或响应正文。
+        self._observed_hosts: List[Dict[str, Any]] = []
+        # 媒体分片请求记录（有界环形缓冲）：直播回放全量下载需要分片 URL
+        # 规律（单 URL Range / seq 分段），只存头信息与完整 URL。
+        self._media_urls: List[Dict[str, Any]] = []
         # 每种捕获策略各自成功入库的条数（A/B/C/D 占比一目了然）。
         self._strategy_stats: Dict[str, int] = {}
 
@@ -145,6 +298,72 @@ class ChannelsDiagnostics:
     def candidate_paths(self) -> List[str]:
         return list(self._candidate_paths)
 
+    def record_host(self, host: str, *, source: str, target: bool = False) -> None:
+        """记录最近 32 个主机/来源组合，拒绝把 URL 或请求内容当主机名。"""
+        if source not in {"connect", "server", "sni", "http", "tls"}:
+            return
+        raw = str(host or "").strip()
+        if not raw or any(char.isspace() or char in "/?#@" for char in raw):
+            return
+        clean = normalize_host(raw)
+        if clean.startswith("["):
+            match = re.fullmatch(r"\[([^]]+)\](?::\d+)?", clean)
+            if not match:
+                return
+            clean = match.group(1)
+        if ":" in clean:
+            try:
+                clean = ipaddress.ip_address(clean).compressed
+            except ValueError:
+                return
+        elif not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?", clean):
+            return
+        for item in self._observed_hosts:
+            if item["host"] == clean and item["source"] == source:
+                item["count"] += 1
+                item["target"] = item["target"] or bool(target)
+                return
+        self._observed_hosts.append({
+            "host": clean, "source": source, "count": 1, "target": bool(target),
+        })
+        del self._observed_hosts[:-32]
+
+    def record_media_request(
+        self,
+        *,
+        method: str = "",
+        status: int = 0,
+        range_header: str = "",
+        content_range: str = "",
+        content_type: str = "",
+        content_length: int = 0,
+        url: str = "",
+    ) -> None:
+        """记录一条媒体分片请求（最近 60 条，环形淘汰最老）。
+
+        URL 是全量下载的关键证据（encfilekey/token/分段参数），完整保留
+        但单条截断到 1200 字符；其余字段为响应头摘要。失败静默——诊断
+        数据绝不影响代理。
+        """
+        try:
+            self._counters["media_requests"] += 1
+            self._counters["media_request_bytes"] += max(0, int(content_length or 0))
+            self._media_urls.append(
+                {
+                    "ts": round(time.time(), 3),
+                    "method": method[:8],
+                    "status": int(status or 0),
+                    "range": range_header[:120],
+                    "content_range": content_range[:160],
+                    "content_type": content_type[:80],
+                    "bytes": max(0, int(content_length or 0)),
+                    "url": url[:1200],
+                }
+            )
+            del self._media_urls[:-60]
+        except Exception:  # noqa: BLE001 —— 诊断记录失败静默
+            pass
+
     def record_heartbeat(
         self, *, page_type: str = "", page_url: str = "", buttons_created: int = 0,
         probe: Optional[Dict[str, Any]] = None,
@@ -152,27 +371,48 @@ class ChannelsDiagnostics:
         self._counters["frontend_heartbeat"] += 1
         self._last_heartbeat_at = time.time()
         if page_type:
-            self._last_page_type = page_type
+            self._last_page_type = page_type if re.fullmatch(r"[A-Za-z0-9_-]{1,32}", page_type) else ""
         if page_url:
-            self._last_page_url = page_url[:300]
+            try:
+                path = urlsplit(page_url).path
+            except ValueError:
+                path = ""
+            self._last_page_url = path[:300] if path.startswith("/") else ""
+        buttons_created = _probe_integer(buttons_created, 1000)
         if buttons_created > 0:
             # 取最大值：按钮是「当前存在数量」而非累计创建次数。
             self._counters["buttons_created"] = max(
                 self._counters["buttons_created"], buttons_created
             )
         if isinstance(probe, dict):
-            # 页面运行时探针（属性名/计数，无用户数据）——真机诊断 hook 目标
-            # 是否存在、hook 是否装上、页面侧看到了多少数据。
-            video = probe.get("video")
-            self._last_probe = {
-                "hooked": list(probe.get("hooked") or [])[:16],
-                "fetch_hooked": bool(probe.get("fetch_hooked")),
-                "xhr_hooked": bool(probe.get("xhr_hooked")),
-                "index_size": int(probe.get("index_size") or 0),
-                "view_size": int(probe.get("view_size") or 0),
-                "window_keys": [str(k)[:64] for k in (probe.get("window_keys") or [])][:60],
-                "video": dict(video) if isinstance(video, dict) else None,
-            }
+            self._last_probe = _clean_probe(probe)
+        else:
+            self._last_probe = {}
+        page_id = self._last_probe.get("page_id") or ""
+        key = page_id or self._last_page_type + "\n" + self._last_page_url
+        self._page_probes.pop(key, None)
+        self._page_probes[key] = {
+            "page_id": page_id,
+            "page_type": self._last_page_type,
+            "page_url": self._last_page_url,
+            "last_heartbeat_at": self._last_heartbeat_at,
+            "probe": self._last_probe,
+        }
+        while len(self._page_probes) > 16:
+            self._page_probes.pop(next(iter(self._page_probes)))
+
+    def _selected_page_probe(self, now: float) -> Optional[Dict[str, Any]]:
+        recent = [
+            item for item in self._page_probes.values()
+            if 0 <= now - item["last_heartbeat_at"] <= 30.0
+        ]
+        if not recent:
+            return None
+        return max(recent, key=lambda item: (
+            isinstance(item["probe"].get("video"), dict),
+            item["probe"].get("visibility") == "visible",
+            item["last_heartbeat_at"],
+        ))
 
     # ------------------------------------------------------------------
     # 查询
@@ -232,13 +472,22 @@ class ChannelsDiagnostics:
                 "level": _LEVEL_ERROR,
                 "stage": stage,
                 "message": (
-                    "检测到代理流量，但没有命中视频号目标域"
-                    "（channels.weixin.qq.com）。请在本机微信里打开「视频号」；"
-                    "若实际域名不同，请在 config.yml 的 channels.intercept_domains "
-                    "补充（默认仅放行具有实际证据的域名，见 channels/domains.py）。"
+                    "嗅探代理收到连接，但这些连接也可能来自浏览器或其他应用；"
+                    "尚未命中视频号目标域（channels.weixin.qq.com）。请关闭视频号"
+                    "窗口后重新打开；若仍无命中，完全退出微信后重开，使其重新读取"
+                    "系统代理，并检查其他代理工具是否覆盖了微信的连接。"
                 ),
             }
         if stage == "target_domain":
+            if self.get("tls_client_failures") > 0 and self.get("tls_intercepted") <= 0:
+                return {
+                    "level": _LEVEL_ERROR,
+                    "stage": stage,
+                    "message": (
+                        "已命中视频号目标域，但微信与嗅探代理的 TLS 握手失败。"
+                        "请检查嗅探证书是否受信任，并在确认后完全退出微信重新打开。"
+                    ),
+                }
             return {
                 "level": _LEVEL_WARN,
                 "stage": stage,
@@ -281,9 +530,11 @@ class ChannelsDiagnostics:
                 "level": _LEVEL_WARN,
                 "stage": stage,
                 "message": (
-                    "下载按钮已运行，但当前微信版本的数据捕获规则失效"
-                    "（parsed_feeds = 0）。请播放视频 1–2 秒或切换一次视频；"
-                    "仍无捕获请反馈微信版本号与页面类型。"
+                    "页面按钮已运行，但当前微信版本不再经页面流量下发 feed 数据"
+                    "（parsed_feeds = 0，播放走 MSE）。请从开头连续播放，加载结束后经"
+                    "MSE 完整性校验并自动保存（channels.mse_auto_save，默认开启；手动"
+                    "保存可点页面里的「下载」按钮；提前切换、跳播造成的残缺缓存不会"
+                    "标记为下载成功）。"
                 ),
             }
         return {
@@ -298,7 +549,7 @@ class ChannelsDiagnostics:
         """状态链（Web 控制台按序渲染；第一个 ok=False 的环节即当前断点）。"""
         c = self._counters
         steps = [
-            ("proxy", "代理连接", c["proxy_connections"], "微信流量经过嗅探代理"),
+            ("proxy", "代理连接", c["proxy_connections"], "所有应用到嗅探代理的 TCP 连接"),
             ("domain", "目标域命中", c["target_domain_connections"],
              "channels.weixin.qq.com"),
             ("html", "HTML 拦截", c["html_pages_seen"], "视频号页面响应"),
@@ -333,6 +584,7 @@ class ChannelsDiagnostics:
     def snapshot(self, *, downloads_success: int = 0) -> Dict[str, Any]:
         """完整诊断快照（status 端点 / Web 轮询的唯一数据源）。"""
         advice = self.advice()
+        selected = self._selected_page_probe(time.time())
         return {
             "counters": self.counters(),
             "strategy_stats": self.strategy_stats(),
@@ -345,8 +597,12 @@ class ChannelsDiagnostics:
             "last_heartbeat_at": self._last_heartbeat_at,
             "last_parse_error": self._last_parse_error,
             "candidate_paths": self.candidate_paths(),
-            "runtime_probe": dict(self._last_probe),
-            "page_type": self._last_page_type,
-            "page_url": self._last_page_url,
+            "observed_hosts": [dict(item) for item in self._observed_hosts],
+            "media_urls": list(self._media_urls),
+            "runtime_probe": deepcopy(selected["probe"]) if selected else {},
+            "runtime_probe_at": selected["last_heartbeat_at"] if selected else None,
+            "page_probes": deepcopy(list(self._page_probes.values())),
+            "page_type": selected["page_type"] if selected else self._last_page_type,
+            "page_url": selected["page_url"] if selected else self._last_page_url,
             "uptime_seconds": round(time.time() - self._started_at, 1),
         }

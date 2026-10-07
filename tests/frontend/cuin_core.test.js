@@ -63,6 +63,19 @@ test("nodeKey 与 localIndexItem", () => {
   assert.equal(core.nodeKey({}), "");
 });
 
+test("微信内嵌播放列表的 id 字符串保持 uint64 精度并与 objectId 共用索引", () => {
+  const node = feedNode("14990527163746486645");
+  node.id = node.objectId;
+  delete node.objectId;
+  delete node.objectNonceId;
+  assert.equal(core.nodeKey(node), "14990527163746486645");
+  assert.equal(core.localIndexItem(node).object_id, "14990527163746486645");
+  assert.equal(core.nodeKey({ id: "14990527163746486645" }), "");
+  assert.equal(core.localIndexItem({ id: "14990527163746486645" }).object_id, "");
+  node.objectId = "legacy";
+  assert.equal(core.nodeKey(node), "legacy");
+});
+
 test("matchFeedBySrc 路径匹配（最新优先）", () => {
   const index = [
     { object_id: "a", url: "https://cdn/a.mp4?x=1" },
@@ -99,6 +112,22 @@ test("buildButtonModel 按能力生成菜单", () => {
   const none = core.buildButtonModel(null);
   assert.equal(none.ready, false);
   assert.deepEqual(none.menu, []);
+});
+
+test("buildButtonModel exposes captured format tiers without inventing resolutions", () => {
+  const model = core.buildButtonModel({ kind: "video", has_original: true,
+    qualities: ["legacy"], quality_options: [
+      { value: "highest", label: "最高可用" },
+      { value: "original", label: "原始源" },
+      { value: "format:1080p60", label: "1080p60 · 1920×1080" },
+      { value: "format:720p", label: "720p · 1280×720" },
+    ] });
+  assert.ok(model.menu.some((item) => item.id === "download:format:1080p60" && /1080p60/.test(item.label)));
+  assert.ok(model.menu.some((item) => item.id === "download:original"));
+  assert.equal(model.menu.filter((item) => item.id === "download:highest").length, 1);
+  assert.ok(!model.menu.some((item) => item.id === "download:lowest"));
+  const sourceOnly = core.buildButtonModel({ kind: "video", quality_options: [] });
+  assert.ok(!sourceOnly.menu.some((item) => /1080/.test(item.label)));
 });
 
 test("detectPageType 覆盖四类页面", () => {
@@ -294,4 +323,164 @@ test("runtime hook：原 Promise 拒绝不干预", async () => {
   win.joinLive = () => Promise.reject(new Error("live failed"));
   core.installRuntimeHooks(win, () => {});
   await assert.rejects(() => win.joinLive(), /live failed/);
+});
+
+// ---------------------------------------------------------------- 原生桥 hook
+
+test("native bridge hook：只捕获目标响应，保持 invoke 与 callback 的调用语义", () => {
+  const response = { jsapi_resp: { resp_json: JSON.stringify({ data: feedNode("bridge") }) } };
+  const callbackThis = { native: true };
+  const invokeThis = { caller: true };
+  const invokeResult = { nativeResult: true };
+  const callbackResult = Promise.resolve("callback result");
+  const request = { url: "https://channels.weixin.qq.com/cgi-bin/findergetcommentdetail?token=private", req_json: "unchanged" };
+  const extra = { extra: true };
+  let invokeCount = 0;
+  let callbackCount = 0;
+  const win = { WeixinJSBridge: { invoke: function (name, params, callback, fourth) {
+    invokeCount += 1;
+    assert.equal(this, invokeThis);
+    assert.equal(name, "finderH5ExtTransfer");
+    assert.equal(params, request);
+    assert.equal(fourth, extra);
+    assert.equal(callback.call(callbackThis, response, extra), callbackResult);
+    return invokeResult;
+  } } };
+  const seen = [];
+  assert.deepEqual(core.installNativeBridgeHooks(win, (...args) => seen.push(args)), ["WeixinJSBridge.invoke:finderH5ExtTransfer"]);
+  assert.equal(invokeCount, 0); // 安装 hook 不主动请求微信接口。
+  const result = win.WeixinJSBridge.invoke.call(invokeThis, "finderH5ExtTransfer", request, function (value, fourth) {
+    callbackCount += 1;
+    assert.equal(this, callbackThis);
+    assert.equal(value, response);
+    assert.equal(fourth, extra);
+    return callbackResult;
+  }, extra);
+  assert.equal(result, invokeResult);
+  assert.equal(invokeCount, 1);
+  assert.equal(callbackCount, 1);
+  assert.equal(seen.length, 1);
+  assert.equal(core.nodeKey(seen[0][0][0]), "bridge");
+  assert.equal(seen[0][1], "finderH5ExtTransfer");
+  assert.deepEqual(seen[0][2], { request_path: "/cgi-bin/findergetcommentdetail" });
+});
+
+test("native bridge hook：snake_case feed 独立归一，uint64 原始数字与字符串均不丢精度", () => {
+  const raw = '{"data":{"object":{"id":14990527163746486645,"object_nonce_id":"nonce",' +
+    '"object_desc":{"media_type":4,"description":"14990527163746486645 remains text \\"id\\":18446744073709551615",' +
+    '"media":[{"url":"https://example.invalid/video","url_token":"?fixture=1",' +
+    '"decode_key":18446744073709551615,"video_play_len":3180,"file_size":9007199254740991}]},' +
+    '"contact":{"head_url":"https://example.invalid/avatar","nickname":"作者"}},' +
+    '"recommend":[{"id":"14990527163746486646","object_desc":{"media_type":4,' +
+    '"media":[{"decode_key":"18446744073709551614","url":"https://example.invalid/next"}]}}]}}';
+  const response = { jsapi_resp: { resp_json: raw } };
+  const seen = [];
+  let callbackCount = 0;
+  const win = { WeixinJSBridge: { invoke(name, params, callback) { callback(response); } } };
+  core.installNativeBridgeHooks(win, (value) => seen.push(value));
+  win.WeixinJSBridge.invoke("finderH5ExtTransfer", { url: "/cgi-bin/detail?private=1#fragment" }, (value) => {
+    callbackCount += 1;
+    assert.equal(value, response);
+    assert.equal(value.jsapi_resp.resp_json, raw);
+  });
+  assert.equal(callbackCount, 1);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].length, 2);
+  const [first, next] = seen[0];
+  assert.equal(core.nodeKey(first), "14990527163746486645");
+  assert.equal(first.objectNonceId, "nonce");
+  assert.equal(first.objectDesc.mediaType, 4);
+  assert.equal(first.objectDesc.description, '14990527163746486645 remains text "id":18446744073709551615');
+  assert.equal(first.objectDesc.media[0].decodeKey, "18446744073709551615");
+  assert.equal(first.objectDesc.media[0].videoPlayLen, 3180);
+  assert.equal(first.objectDesc.media[0].fileSize, 9007199254740991);
+  assert.equal(first.objectDesc.media[0].urlToken, "?fixture=1");
+  assert.equal(first.contact.headUrl, "https://example.invalid/avatar");
+  assert.equal(core.nodeKey(next), "14990527163746486646");
+  assert.equal(next.objectDesc.media[0].decodeKey, "18446744073709551614");
+  assert.equal(first.object_desc, undefined);
+});
+
+test("native bridge hook：其他 API 与没有回调的请求参数原样透传", () => {
+  const calls = [];
+  const seen = [];
+  const callback = () => {};
+  const params = { url: "/cgi-bin/detail" };
+  const win = { WeixinJSBridge: { invoke: function () { calls.push([...arguments]); return "native"; } } };
+  core.installNativeBridgeHooks(win, (value) => seen.push(value));
+  assert.equal(win.WeixinJSBridge.invoke("finderGetInitData", params, callback, 7), "native");
+  assert.deepEqual(calls[0], ["finderGetInitData", params, callback, 7]);
+  assert.equal(win.WeixinJSBridge.invoke("finderH5ExtTransfer", params), "native");
+  assert.deepEqual(calls[1], ["finderH5ExtTransfer", params]);
+  assert.deepEqual(seen, []);
+});
+
+test("native bridge hook：坏 JSON、超限文本与非 objectDesc 响应均忽略，原回调照常执行", () => {
+  const inputs = [
+    { jsapi_resp: { resp_json: '{"object_desc":broken}' } },
+    { jsapi_resp: { resp_json: JSON.stringify({ id: "generic", object_desc: "invalid" }) } },
+    { jsapi_resp: { resp_json: JSON.stringify({ objectDesc: [] }) } },
+    { jsapi_resp: { resp_json: JSON.stringify({ id: "generic", code: 0 }) } },
+    { jsapi_resp: { resp_json: '{"id":014990527163746486645,"object_desc":{}}' } },
+    { jsapi_resp: { resp_json: '{14990527163746486645:1,"object_desc":{}}' } },
+    { jsapi_resp: { resp_json: '{"object_desc":{"description":"' + '\\"'.repeat(20000) } },
+    { jsapi_resp: { resp_json: { objectDesc: {} } } },
+    { jsapi_resp: { resp_json: " ".repeat(8 * 1024 * 1024) + JSON.stringify(feedNode("too-large")) } },
+    { jsapi_resp: { resp_json: JSON.stringify({ ...feedNode("too-many-utf8-bytes"), padding: "中".repeat(3 * 1024 * 1024) }) } },
+    { get jsapi_resp() { throw new Error("host getter"); } },
+    null,
+  ];
+  const win = { WeixinJSBridge: { invoke(name, params, callback) { return callback(params.response); } } };
+  let callbackCount = 0;
+  const seen = [];
+  core.installNativeBridgeHooks(win, (value) => seen.push(value));
+  for (const response of inputs) {
+    assert.equal(win.WeixinJSBridge.invoke("finderH5ExtTransfer", { response }, (value) => {
+      callbackCount += 1;
+      assert.equal(value, response);
+      return "ok";
+    }), "ok");
+  }
+  assert.equal(callbackCount, inputs.length);
+  assert.deepEqual(seen, []);
+});
+
+test("native bridge hook：observer 异常静默，原 invoke/callback 异常与 Promise 保留", async () => {
+  const response = { jsapi_resp: { resp_json: JSON.stringify(feedNode("a")) } };
+  const nativeError = new Error("native invoke error");
+  const callbackError = new Error("original callback error");
+  const nativePromise = Promise.reject(nativeError);
+  await nativePromise.catch(() => {});
+  const win = { WeixinJSBridge: { invoke(name, params, callback) {
+    if (params.mode === "throw") throw nativeError;
+    if (params.mode === "promise") return nativePromise;
+    return callback(response);
+  } } };
+  let callbackCount = 0;
+  core.installNativeBridgeHooks(win, () => { throw new Error("observer error"); });
+  assert.equal(win.WeixinJSBridge.invoke("finderH5ExtTransfer", {}, () => { callbackCount += 1; return "ok"; }), "ok");
+  assert.equal(callbackCount, 1);
+  assert.throws(() => win.WeixinJSBridge.invoke("finderH5ExtTransfer", {}, () => { throw callbackError; }), (e) => e === callbackError);
+  assert.throws(() => win.WeixinJSBridge.invoke("finderH5ExtTransfer", { mode: "throw" }, () => {}), (e) => e === nativeError);
+  assert.equal(win.WeixinJSBridge.invoke("finderH5ExtTransfer", { mode: "promise" }, () => {}), nativePromise);
+  await assert.rejects(nativePromise, (e) => e === nativeError);
+});
+
+test("native bridge hook：迟加载可重试，重复安装和只读 invoke 不伪报成功", () => {
+  const win = {};
+  assert.deepEqual(core.installNativeBridgeHooks(win, () => {}), []);
+  let callbackCount = 0;
+  win.WeixinJSBridge = { invoke(name, params, callback) { callback({ jsapi_resp: { resp_json: JSON.stringify(feedNode("a")) } }); } };
+  const seen = [];
+  const duplicateSeen = [];
+  assert.equal(core.installNativeBridgeHooks(win, (value) => seen.push(value)).length, 1);
+  const wrapped = win.WeixinJSBridge.invoke;
+  assert.deepEqual(core.installNativeBridgeHooks(win, (value) => duplicateSeen.push(value)), []);
+  assert.equal(win.WeixinJSBridge.invoke, wrapped);
+  win.WeixinJSBridge.invoke("finderH5ExtTransfer", {}, () => { callbackCount += 1; });
+  assert.equal(callbackCount, 1);
+  assert.equal(seen.length, 1);
+  assert.deepEqual(duplicateSeen, []);
+  const readonly = { WeixinJSBridge: Object.freeze({ invoke() {} }) };
+  assert.deepEqual(core.installNativeBridgeHooks(readonly, () => {}), []);
 });

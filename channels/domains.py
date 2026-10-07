@@ -28,6 +28,8 @@ from typing import Iterable, List, Sequence, Tuple
 
 __all__ = [
     "DEFAULT_INTERCEPT_SUFFIXES",
+    "MEDIA_URL_SUFFIXES",
+    "is_media_host",
     "should_intercept_host",
     "build_allow_hosts_patterns",
     "normalize_host",
@@ -35,6 +37,17 @@ __all__ = [
 
 # 视频号 feed 接口所在主域（后缀匹配，覆盖全部子域）。当前唯一必需域名。
 DEFAULT_INTERCEPT_SUFFIXES: Tuple[str, ...] = ("weixin.qq.com",)
+
+# 媒体分片 CDN（2026-09-25 直播回放真机需求）：MSE 播放器从这些域拉
+# fMP4 分片，URL 里带全量下载所需的全部参数（encfilekey/token/分段）。
+# 解密它们只为「读取分片 URL 与响应头」，不解析响应体——SnifferAddon
+# 对媒体域只记录 URL，should_intercept_host 仍只认 weixin.qq.com。
+MEDIA_URL_SUFFIXES: Tuple[str, ...] = ("finder.video.qq.com",)
+
+
+def is_media_host(host: str) -> bool:
+    """host 是否属于媒体分片 CDN（仅用于 URL 记录，不参与响应解析）。"""
+    return should_intercept_host(host, MEDIA_URL_SUFFIXES)
 
 
 def normalize_host(host: str) -> str:

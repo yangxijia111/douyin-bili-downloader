@@ -495,13 +495,19 @@ class YtdlpDownloader:
 
         spec = PLATFORM_BY_KEY.get(platform)
         domain = spec.cookie_domain if spec else f".{platform}.com"
+        self.file_manager.base_path.mkdir(parents=True, exist_ok=True)
         handle = tempfile.NamedTemporaryFile(
-            "w", prefix=f"ytdlp_{platform}_", suffix=".txt", delete=False, encoding="utf-8"
+            "w", prefix=f"ytdlp_{platform}_", suffix=".txt", delete=False,
+            encoding="utf-8", dir=self.file_manager.base_path,
         )
         handle.close()
         target = Path(handle.name)
-        write_netscape_cookies(cookies, domain, target)
         self._temp_cookie_path = target
+        try:
+            write_netscape_cookies(cookies, domain, target)
+        except Exception:
+            self._cleanup_cookie_file()
+            raise
         return target
 
     def _base_options(self, platform: str, cookie_path: Optional[Path]) -> Dict[str, Any]:
@@ -528,6 +534,8 @@ class YtdlpDownloader:
             "windowsfilenames": os.name == "nt",
             "overwrites": False,
             "continuedl": True,
+            # yt-dlp 默认写用户级缓存；下载任务的文件仅保留在输出目录。
+            "cachedir": False,
         }
         if not audio_only:
             options["merge_output_format"] = "mp4"

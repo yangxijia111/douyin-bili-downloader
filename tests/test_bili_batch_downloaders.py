@@ -338,6 +338,33 @@ async def test_fav_downloader_requires_media_id(tmp_path):
     assert client.get_fav_resources.await_count == 0
 
 
+async def test_fav_downloader_continues_past_unique_unusable_pages(tmp_path):
+    downloader, client = _build(BiliFavDownloader, tmp_path)
+    pages = [
+        {"items": [{"id": index, "type": 2, "attr": 1}], "has_more": True}
+        for index in range(1, 5)
+    ]
+    pages.append({"items": [{"bvid": "BV-valid", "type": 2}], "has_more": False})
+    client.get_fav_resources = AsyncMock(side_effect=pages)
+
+    result = await downloader.download({"type": "favlist", "media_id": "999"})
+
+    assert client.get_fav_resources.await_count == 5
+    assert result.total == result.success == 1
+
+
+async def test_fav_downloader_stops_repeated_unusable_page(tmp_path):
+    downloader, client = _build(BiliFavDownloader, tmp_path)
+    client.get_fav_resources = AsyncMock(return_value={
+        "items": [{"id": 123, "type": 2, "attr": 1}], "has_more": True,
+    })
+
+    result = await downloader.download({"type": "favlist", "media_id": "999"})
+
+    assert result.total == 0
+    assert client.get_fav_resources.await_count == 2
+
+
 # ----------------------------------------------------------------------
 # 工厂
 # ----------------------------------------------------------------------

@@ -236,6 +236,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # 是否向微信视频号页面注入下载按钮（bootstrap + 虚拟资源）。
         # False 时退化为 v2.0.1 的纯被动嗅探（无页面 UI）。
         "inject_ui": True,
+        # MSE 分片自动保存（v2.0.4）：新版微信 feed 数据不经页面流量下发
+        # （原生桥接 + MSE 播放），嗅探捕获不到直链——播放结束/切换视频时
+        # 自动把已播放的分片上传保存成为主下载通道，默认开启。关闭后只剩
+        # 页面内「下载」按钮手动保存。
+        "mse_auto_save": True,
         # Strategy D：拦截 res.wx.qq.com 的 JS bundle 并应用兼容补丁。
         # 默认 False（当前无已登记补丁）；开启需同时在 intercept_domains
         # 增加 res.wx.qq.com，且仅在有真机证据时使用。

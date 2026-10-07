@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
+from core.api_client import LoginRequiredError
 from core.downloader_base import BaseDownloader, DownloadResult
 from core.metadata import build_author_home_url, extract_author_sec_uid
 from utils.logger import setup_logger
@@ -203,6 +204,8 @@ class MusicDownloader(BaseDownloader):
             return None
         try:
             return await getter(music_id)
+        except LoginRequiredError:
+            raise
         except Exception as exc:
             logger.warning("Get music detail failed: %s", exc)
             return None
@@ -213,6 +216,8 @@ class MusicDownloader(BaseDownloader):
             return None
         try:
             data = await getter(music_id, cursor=0, count=1)
+        except LoginRequiredError:
+            raise
         except Exception as exc:
             logger.warning("Get music aweme failed: %s", exc)
             return None

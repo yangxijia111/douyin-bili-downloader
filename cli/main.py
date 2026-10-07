@@ -22,6 +22,7 @@ from bilibili.url_parser import (
 from bilibili.url_parser import (
     normalize_short_url as normalize_bili_short_url,
 )
+from cli.link_input import expand_link_inputs, extract_url_from_text
 from cli.login_flow import can_interactive_login, interactive_relogin
 from cli.progress_display import ProgressDisplay
 from config import ConfigLoader
@@ -131,6 +132,7 @@ async def download_url(
     database: Database = None,
     progress_reporter: ProgressDisplay = None,
 ):
+    url = extract_url_from_text(url)
     if progress_reporter:
         progress_reporter.advance_step("初始化", "创建下载组件")
     file_manager = FileManager(config.get("path"))
@@ -587,7 +589,8 @@ async def main_async(args):
     # 若 config 不存在且使用了 --hot-board / --search / --serve / --channels 等
     # 独立子命令，允许以默认配置运行（只要命令行提供了 --path）。
     if not Path(config_path).exists():
-        if not (args.hot_board is not None or args.search or args.serve or args.channels):
+        if not (args.hot_board is not None or args.search or args.serve or args.channels
+                or args.channels_link or args.url):
             display.print_error(f"Config file not found: {config_path}")
             return
         # For ``--serve`` we still pass the (yet-missing) path so later
@@ -646,6 +649,7 @@ async def main_async(args):
     if args.thread:
         config.update(thread=args.thread)
 
+    config.update(link=expand_link_inputs(config.get_links()))
     if not config.validate():
         display.print_error("Invalid configuration: missing required fields")
         return
@@ -948,7 +952,7 @@ def main():
     try:
         from __init__ import __version__
     except ImportError:
-        __version__ = "2.0.3"
+        __version__ = "2.0.4"
     parser.add_argument("--version", action="version", version=__version__)
 
     args = parser.parse_args()

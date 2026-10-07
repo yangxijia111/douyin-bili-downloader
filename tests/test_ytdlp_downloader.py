@@ -518,6 +518,7 @@ async def test_cookie_file_is_written_and_cleaned_up(tmp_path, fake_ytdlp):
 
     extract_opts = module.YoutubeDL.instances[0].opts
     cookie_path = Path(extract_opts["cookiefile"])
+    assert cookie_path.is_relative_to(tmp_path)
     # 下载期间 Cookie 文件必须可用；任务结束后必须删除（临时文件不留凭据）
     _, download_opts = module.YoutubeDL.download_calls[0]
     assert download_opts["cookiefile"] == str(cookie_path)

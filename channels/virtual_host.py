@@ -9,6 +9,7 @@
     POST /__cuin/heartbeat                前端心跳（页面类型 / 按钮数）
     POST /__cuin/task                     页面按钮触发下载 / 录制
     GET  /__cuin/task/{id}                任务状态轮询
+    POST /__cuin/mse                     MSE 分片旁路：begin/chunk/end/abort
 
 安全边界（每一条都有离线测试）：
 
@@ -28,13 +29,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
 from channels.diagnostics import ChannelsDiagnostics
 from channels.domains import should_intercept_host
-from channels.feed import ChannelFeed
+from channels.feed import ChannelFeed, extract_feeds, extract_preview_feeds, quality_options
+from channels.mse_capture import MseCaptureError
 from channels.pipeline import FeedCapturePipeline
 
 __all__ = [
@@ -43,6 +46,7 @@ __all__ = [
     "MAX_FEED_BODY_BYTES",
     "MAX_FEED_NODES",
     "MAX_TASK_BODY_BYTES",
+    "MAX_MSE_BODY_BYTES",
     "VirtualHostAddon",
     "build_feed_bridge_view",
     "validate_feed_payload",
@@ -57,6 +61,11 @@ MAX_FEED_BODY_BYTES = 4 * 1024 * 1024
 MAX_FEED_NODES = 200
 # 任务请求体极小，4KB 足够。
 MAX_TASK_BODY_BYTES = 4 * 1024
+# MSE 分片批请求：页面按 ~2MB 二进制打包（base64 后 ~2.7MB），4MB 留余量。
+MAX_MSE_BODY_BYTES = 4 * 1024 * 1024
+_TASK_QUALITY_RE = re.compile(
+    r"(?:highest|lowest|original|(?:2160|1440|1080|720|540|480|360)p|format:[A-Za-z0-9_.-]{1,128})"
+)
 
 _ASSET_CONTENT_TYPES = {
     ".js": "application/javascript; charset=utf-8",
@@ -70,13 +79,17 @@ def build_feed_bridge_view(feed: ChannelFeed) -> Dict[str, Any]:
     页面只需要知道：这条 feed 能不能下、有哪些画质档、封面可不可用——
     足以驱动按钮菜单，不泄露任何下载敏感字段。
     """
+    options = quality_options(feed)
     qualities: List[str] = []
     if feed.kind == "video":
         qualities = ["highest", "lowest"]
-        for spec in feed.specs:
-            text = str(spec.get("fileFormat") or "")
-            if text and text not in qualities:
-                qualities.append(text)
+        if feed.has_original:
+            qualities.append("original")
+        for option in options:
+            if option["value"].startswith("format:"):
+                text = option["value"][len("format:"):]
+                if text not in qualities:
+                    qualities.append(text)
     return {
         "feed_id": feed.feed_id,
         "object_id": feed.object_id,
@@ -89,6 +102,8 @@ def build_feed_bridge_view(feed: ChannelFeed) -> Dict[str, Any]:
         "has_decode_key": feed.decode_key is not None,
         "has_cover": bool(feed.cover_url),
         "qualities": qualities,
+        "quality_options": options,
+        "has_original": feed.has_original,
     }
 
 
@@ -131,12 +146,23 @@ class VirtualHostAddon:
         allowed_suffixes: Tuple[str, ...] = ("weixin.qq.com",),
         task_hub: Any = None,
         assets_dir: Optional[Path] = None,
+        mse_store: Any = None,
     ) -> None:
         self.pipeline = pipeline
         self.diagnostics = diagnostics or ChannelsDiagnostics()
         self.allowed_suffixes = tuple(allowed_suffixes) or ("weixin.qq.com",)
         self.task_hub = task_hub
         self.assets_dir = assets_dir or VIRTUAL_ASSETS_DIR
+        self.mse_store = mse_store
+        self._mse_tasks = set()
+        self._closing = False
+
+    async def aclose(self):
+        self._closing = True
+        if self._mse_tasks:
+            await asyncio.gather(*self._mse_tasks, return_exceptions=True)
+        if self.mse_store is not None and hasattr(self.mse_store, "aclose"):
+            await self.mse_store.aclose()
 
     # ------------------------------------------------------------------
     # mitmproxy 入口
@@ -205,6 +231,13 @@ class VirtualHostAddon:
             self._handle_task_status(flow, path[len(VIRTUAL_PREFIX + "/task/"):])
             return True
 
+        if path == VIRTUAL_PREFIX + "/mse":
+            if method != "POST":
+                self._respond(flow, 405, {"ok": False, "error": "POST required"})
+                return True
+            self._handle_mse(flow)
+            return True
+
         self._respond(flow, 404, {"ok": False, "error": "unknown __cuin endpoint"})
         return True
 
@@ -265,13 +298,26 @@ class VirtualHostAddon:
             self._respond(flow, 400, {"ok": False, "error": str(exc)})
             return
         fresh = self.pipeline.ingest_page_nodes(nodes, strategy=strategy, page=page)
+        # 入库通知只针对新条目；每个页面仍需要本次合法节点的能力视图。
+        # 复用唯一解析器识别 objectId/id/nonce，避免用裸 ID 查询泄露无关条目。
+        try:
+            parsed = extract_feeds(nodes)
+            if not parsed:
+                parsed = extract_preview_feeds(nodes)
+        except Exception:  # noqa: BLE001 —— 流水线已记录解析错误，桥接继续本地响应
+            parsed = fresh
+        matched: Dict[str, ChannelFeed] = {}
+        for feed in parsed:
+            stored = self.pipeline.store.get(feed.dedup_key)
+            if stored is not None:
+                matched[stored.dedup_key] = stored
         self._respond(
             flow,
             200,
             {
                 "ok": True,
                 "accepted": len(fresh),
-                "feeds": [build_feed_bridge_view(f) for f in fresh],
+                "feeds": [build_feed_bridge_view(f) for f in matched.values()],
             },
         )
 
@@ -292,7 +338,10 @@ class VirtualHostAddon:
             buttons_created=buttons if isinstance(buttons, int) else 0,
             probe=probe if isinstance(probe, dict) else None,
         )
-        self._respond(flow, 200, {"ok": True})
+        # 下发 MSE 自动保存开关（配置 channels.mse_auto_save）：页面据此
+        # 决定是否在播放结束/切走/链淘汰时自动上传分片（v2.0.4 主下载通道）。
+        auto_save = bool(getattr(self.mse_store, "auto_save", False))
+        self._respond(flow, 200, {"ok": True, "mse_auto_save": auto_save})
 
     # ------------------------------------------------------------------
     # 任务（下载 / 录制）
@@ -319,7 +368,9 @@ class VirtualHostAddon:
         if action not in ("download", "record", "stop", "cover"):
             self._respond(flow, 400, {"ok": False, "error": "bad action"})
             return
-        if quality is not None and (not isinstance(quality, str) or len(quality) > 32):
+        if quality is not None and (
+            not isinstance(quality, str) or _TASK_QUALITY_RE.fullmatch(quality) is None
+        ):
             self._respond(flow, 400, {"ok": False, "error": "bad quality"})
             return
         try:
@@ -345,8 +396,79 @@ class VirtualHostAddon:
         self._respond(flow, 200, {"ok": True, "task": record})
 
     # ------------------------------------------------------------------
+    # MSE 分片旁路（begin / chunk / end / abort）
+    # ------------------------------------------------------------------
+
+    def _handle_mse(self, flow) -> None:
+        if self._closing:
+            self._respond(flow, 503, {"ok": False, "error": "嗅探正在停止"})
+            return
+        if self.mse_store is None:
+            self._respond(flow, 503, {"ok": False, "error": "mse capture unavailable"})
+            return
+        payload, error = self._read_json_body(flow, MAX_MSE_BODY_BYTES)
+        if error is not None:
+            self._respond(flow, 400, {"ok": False, "error": error})
+            return
+        if not self._same_origin(flow):
+            self._respond(flow, 403, {"ok": False, "error": "origin mismatch"})
+            return
+        body = payload if isinstance(payload, dict) else {}
+        op = body.get("op")
+        stream_id = body.get("stream_id")
+        try:
+            if op == "begin":
+                cap = self.mse_store.begin(
+                    stream_id,
+                    mime=body.get("mime") if isinstance(body.get("mime"), str) else "",
+                    page=body.get("page") if isinstance(body.get("page"), str) else "",
+                )
+                self._respond(flow, 200, {"ok": True, "op": "begin", "cap": cap})
+                return
+            if op == "chunk":
+                total = self.mse_store.chunk(stream_id, body.get("b64"))
+                self._respond(flow, 200, {"ok": True, "op": "chunk", "bytes": total})
+                return
+            if op == "end":
+                # Keep FFmpeg off the proxy loop; this request stays local.
+                if hasattr(flow, "intercept") and hasattr(self.mse_store, "finalize_async"):
+                    loop = asyncio.get_running_loop()
+                    flow.intercept()
+                    task = loop.create_task(self._finish_mse(flow, stream_id, body.get("meta")))
+                    self._mse_tasks.add(task)
+                    task.add_done_callback(self._mse_tasks.discard)
+                    return
+                result = self.mse_store.finalize(stream_id, body.get("meta"))
+                self._respond(flow, 200, {"ok": True, "op": "end", **result})
+                return
+            if op == "abort":
+                self.mse_store.abort(stream_id)
+                self._respond(flow, 200, {"ok": True, "op": "abort"})
+                return
+            self._respond(flow, 400, {"ok": False, "error": "bad op"})
+        except KeyError:
+            self._respond(flow, 404, {"ok": False, "error": "stream not found"})
+        except MseCaptureError as exc:
+            self.diagnostics.record_parse_error("mse: " + str(exc))
+            self._respond(flow, 400, {"ok": False, "error": str(exc)[:200]})
+        except Exception as exc:  # noqa: BLE001 —— 协议外异常按内部错误返回
+            self._respond(flow, 500, {"ok": False, "error": f"internal: {exc}"})
+
+    # ------------------------------------------------------------------
     # 请求体 / 同源校验 / 响应
     # ------------------------------------------------------------------
+
+    async def _finish_mse(self, flow, stream_id, meta):
+        try:
+            result = await self.mse_store.finalize_async(stream_id, meta)
+            self._respond(flow, 200, {"ok": True, "op": "end", **result})
+        except KeyError:
+            self._respond(flow, 404, {"ok": False, "error": "stream not found"})
+        except Exception as exc:
+            self.diagnostics.record_parse_error("mse: " + str(exc))
+            self._respond(flow, 400, {"ok": False, "error": str(exc)[:200]})
+        finally:
+            flow.resume()
 
     def _read_json_body(
         self, flow, max_bytes: int

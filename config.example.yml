@@ -374,13 +374,21 @@ channels:
   # /__cuin/* 由代理本地响应，不外泄敏感数据）。false 时退化为纯被动嗅探。
   inject_ui: true
 
+  # MSE 分片自动保存（v2.0.4，默认开启）：新版微信的 feed 数据不经页面
+  # 流量下发（原生桥接 + MSE 播放），嗅探捕获不到直链——视频播放结束或
+  # 切换时自动把已播放的分片上传保存（保存的是播放器已缓冲的内容，从
+  # 头播放可保存完整视频）。关闭后只剩页面内「下载」按钮手动保存。
+  mse_auto_save: true
+
   # Strategy D 兼容补丁：拦截 res.wx.qq.com 的 JS bundle 并应用补丁。
   # 默认 false（当前无已登记补丁，仅页面 hook 即可稳定捕获时无需开启）；
   # 开启需同时在下面 intercept_domains 增加 res.wx.qq.com。
   patch_js_bundles: false
 
-  # 画质偏好：highest / lowest / 1080p / 720p / 480p …，匹配不到自动回退
-  # 到微信下发版本。
+  # 画质偏好：highest / lowest / original / 2160p / 1440p / 1080p / 720p 等。
+  # highest 在已捕获档位中按分辨率、码率选择最高；指定分辨率选最接近的档位。
+  # original 仅使用明确捕获的源文件地址，没有时回退最高可用档。
+  # 网页或微信下载菜单可逐条选择实际档位；未捕获档位时只下载当前源。
   quality: highest
 
   # 本机嗅探代理端口（换端口需重启嗅探会话）。

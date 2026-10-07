@@ -62,6 +62,8 @@ class TestInjectBootstrapFunction:
         marker_pos = out.index(INJECT_MARKER)
         assert head_pos < marker_pos
         assert "/__cuin/assets/cuin_core.js" in out
+        assert "/__cuin/assets/media_source.js" in out
+        assert out.index("media_source.js") < out.index("bootstrap.js")
         assert "/__cuin/assets/bootstrap.js" in out
         assert "/__cuin/assets/channels.css" in out
 
@@ -69,7 +71,7 @@ class TestInjectBootstrapFunction:
         once = inject_bootstrap(_PAGE_HTML)
         twice = inject_bootstrap(once)
         assert once == twice
-        assert twice.count(INJECT_MARKER) == 3  # 一次注入的三个标记
+        assert twice.count(INJECT_MARKER) == 4
 
     def test_nonce_copied_from_existing_script(self):
         html = (
@@ -252,16 +254,118 @@ class TestInjectorAddon:
     def test_connection_counters(self):
         diagnostics = ChannelsDiagnostics()
         addon = InjectorAddon(diagnostics)
-        addon.client_connected(SimpleNamespace(client=SimpleNamespace()))
+        client = SimpleNamespace(id="client-domain", sni="channels.weixin.qq.com")
+        server = SimpleNamespace(address=("channels.weixin.qq.com", 443))
+        addon.client_connected(client)
+        addon.server_connect(SimpleNamespace(client=client, server=server))
         addon.server_connect(
-            SimpleNamespace(server=SimpleNamespace(address=("channels.weixin.qq.com", 443)))
-        )
-        addon.server_connect(
-            SimpleNamespace(server=SimpleNamespace(address=("finder.video.qq.com", 443)))
+            SimpleNamespace(server=SimpleNamespace(address=("finder.video.qq.com", 443)),
+                            client=SimpleNamespace(id="client-media"))
         )
         assert diagnostics.get("proxy_connections") == 1
         assert diagnostics.get("target_domain_connections") == 1
+        assert diagnostics.get("tls_intercepted") == 0
+
+        tls_event = SimpleNamespace(conn=client, context=SimpleNamespace(
+            client=client, server=server
+        ))
+        addon.tls_established_client(tls_event)
+        addon.tls_established_client(tls_event)
         assert diagnostics.get("tls_intercepted") == 1
+
+    def test_ip_connect_with_channels_sni_is_a_target_without_claiming_tls_success(self):
+        diagnostics = ChannelsDiagnostics()
+        addon = InjectorAddon(diagnostics)
+        client = SimpleNamespace(id="client-ip-connect", sni="channels.weixin.qq.com")
+        server = SimpleNamespace(address=("203.0.113.40", 443))
+        context = SimpleNamespace(client=client, server=server)
+        addon.client_connected(client)
+        addon.server_connect(SimpleNamespace(client=client, server=server))
+        addon.tls_clienthello(SimpleNamespace(
+            context=context, client_hello=SimpleNamespace(sni="channels.weixin.qq.com")
+        ))
+
+        assert diagnostics.get("proxy_connections") == 1
+        assert diagnostics.get("target_domain_connections") == 1
+        assert diagnostics.get("tls_intercepted") == 0
+
+    def test_connection_hooks_deduplicate_and_show_hosts_when_channels_tls_fails(self):
+        diagnostics = ChannelsDiagnostics()
+        addon = InjectorAddon(diagnostics)
+        client = SimpleNamespace(id="client-failed", sni="channels.weixin.qq.com")
+        server = SimpleNamespace(address=("203.0.113.40", 443))
+        context = SimpleNamespace(client=client, server=server)
+        addon.client_connected(client)
+        addon.client_connected(client)
+        connect_flow = SimpleNamespace(client_conn=client, request=SimpleNamespace(
+            host="203.0.113.40", pretty_host="203.0.113.40"
+        ))
+        addon.http_connect(connect_flow)
+        addon.http_connect(connect_flow)
+        addon.server_connect(SimpleNamespace(client=client, server=server))
+        hello = SimpleNamespace(context=context, client_hello=SimpleNamespace(
+            sni="channels.weixin.qq.com"
+        ))
+        addon.tls_clienthello(hello)
+        addon.tls_clienthello(hello)
+        addon.requestheaders(SimpleNamespace(client_conn=client, request=SimpleNamespace(
+            pretty_host="channels.weixin.qq.com", path="/private?token=secret"
+        )))
+        failed = SimpleNamespace(conn=client, context=context)
+        addon.tls_failed_client(failed)
+        addon.tls_failed_client(failed)
+
+        snapshot = diagnostics.snapshot()
+        assert snapshot["counters"]["proxy_connections"] == 1
+        assert snapshot["counters"]["connect_requests"] == 1
+        assert snapshot["counters"]["target_domain_connections"] == 1
+        assert snapshot["counters"]["tls_intercepted"] == 0
+        assert snapshot["counters"]["tls_client_failures"] == 1
+        assert {row["host"] for row in snapshot["observed_hosts"]} == {
+            "203.0.113.40", "channels.weixin.qq.com",
+        }
+        assert "secret" not in str(snapshot["observed_hosts"])
+        assert snapshot["level"] == "error"
+        assert "TLS" in snapshot["message"]
+
+    def test_unrelated_proxy_client_does_not_prove_wechat_or_tls_interception(self):
+        diagnostics = ChannelsDiagnostics()
+        addon = InjectorAddon(diagnostics)
+        client = SimpleNamespace(id="browser-client", sni="example.com")
+        server = SimpleNamespace(address=("example.com", 443))
+        context = SimpleNamespace(client=client, server=server)
+        addon.client_connected(client)
+        addon.server_connect(SimpleNamespace(client=client, server=server))
+        addon.tls_established_client(SimpleNamespace(conn=client, context=context))
+        addon.tls_failed_client(SimpleNamespace(conn=client, context=context))
+
+        snapshot = diagnostics.snapshot()
+        assert snapshot["counters"]["proxy_connections"] == 1
+        assert snapshot["counters"]["target_domain_connections"] == 0
+        assert snapshot["counters"]["tls_intercepted"] == 0
+        assert snapshot["counters"]["tls_client_failures"] == 0
+        assert snapshot["stage"] == "no_target_domain"
+        assert "其他应用" in snapshot["message"]
+        assert all(row["target"] is False for row in snapshot["observed_hosts"])
+
+    def test_independent_connections_each_count_once_across_hooks(self):
+        diagnostics = ChannelsDiagnostics()
+        addon = InjectorAddon(diagnostics)
+        server = SimpleNamespace(address=("channels.weixin.qq.com", 443))
+        for number in range(2):
+            client = SimpleNamespace(id="client-" + str(number), sni="channels.weixin.qq.com")
+            context = SimpleNamespace(client=client, server=server)
+            addon.client_connected(client)
+            addon.server_connect(SimpleNamespace(client=client, server=server))
+            addon.tls_clienthello(SimpleNamespace(context=context, client_hello=SimpleNamespace(
+                sni="channels.weixin.qq.com"
+            )))
+            addon.tls_established_client(SimpleNamespace(conn=client, context=context))
+            addon.client_disconnected(client)
+
+        assert diagnostics.get("proxy_connections") == 2
+        assert diagnostics.get("target_domain_connections") == 2
+        assert diagnostics.get("tls_intercepted") == 2
 
 
 class _MarkerPatch(JsBundlePatch):

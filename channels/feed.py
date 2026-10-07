@@ -26,8 +26,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
-from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 __all__ = [
     "MEDIA_TYPE_IMAGE",
@@ -38,6 +38,8 @@ __all__ = [
     "extract_feeds",
     "extract_preview_feeds",
     "pick_quality_url",
+    "quality_options",
+    "resolve_quality",
 ]
 
 # objectDesc.mediaType 的取值。
@@ -46,7 +48,9 @@ MEDIA_TYPE_IMAGE = 2
 MEDIA_TYPE_LIVE = 9
 
 # 画质档位里提取目标高度的模型（"1080p" / "1080p60" / "720p"…）。
-_QUALITY_RE = re.compile(r"(\d{3,4})p")
+_QUALITY_RE = re.compile(r"(\d{3,4})p(?:\d{1,3})?")
+_FORMAT_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+_IMAGE_PATH_RE = re.compile(r"\.(?:jpe?g|png|gif|webp|bmp|avif|svg)$", re.IGNORECASE)
 
 
 def _as_int(value: Any, default: int = 0) -> int:
@@ -71,6 +75,31 @@ def _media_url(media: Dict[str, Any]) -> str:
     return (_as_str(media.get("url")) + _as_str(media.get("urlToken"))).strip()
 
 
+def _original_media_url(media: Dict[str, Any]) -> str:
+    """只认视频 media 的明确 fullUrl，不从封面或播放地址猜测原画链接。"""
+    value = media.get("fullUrl") or media.get("fullURL")
+    if not isinstance(value, str):
+        return ""
+    value = value.strip()
+    try:
+        parts = urlsplit(value)
+        host = (parts.hostname or "").lower().rstrip(".")
+        port = parts.port
+    except ValueError:
+        return ""
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        return ""
+    if host != "finder.video.qq.com" and not host.endswith(".finder.video.qq.com"):
+        return ""
+    if parts.username is not None or parts.password is not None:
+        return ""
+    if port is not None and port != (443 if parts.scheme == "https" else 80):
+        return ""
+    if _IMAGE_PATH_RE.search(unquote(parts.path)):
+        return ""
+    return value
+
+
 @dataclass
 class ChannelFeed:
     """一条捕获到的视频号动态。
@@ -86,8 +115,11 @@ class ChannelFeed:
     # video / image / live —— 由 media_type 与可用字段共同决定。
     kind: str = "video"
     url: str = ""
+    full_url: str = ""  # 仅来自视频 media.fullUrl 的明确原文件地址。
     decode_key: Optional[int] = None
     specs: List[Dict[str, Any]] = field(default_factory=list)
+    width: int = 0  # 当前播放源几何；不代表所有档位中的最高画质。
+    height: int = 0
     file_size: int = 0
     duration: int = 0  # 秒
     title: str = ""
@@ -103,6 +135,7 @@ class ChannelFeed:
     # 运行时状态（FeedStore / 下载器维护，序列化给前端用）。
     status: str = "pending"  # pending / downloading / done / failed / skipped
     downloaded_paths: List[str] = field(default_factory=list)
+    downloaded_quality: Dict[str, Any] = field(default_factory=dict)
     error: str = ""
 
     @property
@@ -118,6 +151,10 @@ class ChannelFeed:
         """增量判重 token，与 aweme 表 / 磁盘扫描的 ``channels_<id>`` 对齐。"""
         return f"channels_{self.object_id or self.nonce_id}"
 
+    @property
+    def has_original(self) -> bool:
+        return self.kind == "video" and bool(_original_media_url({"fullUrl": self.full_url}))
+
     def to_dict(self) -> Dict[str, Any]:
         """完整内部视图：含直链、decodeKey 等下载必需的敏感字段。
 
@@ -131,8 +168,11 @@ class ChannelFeed:
             "kind": self.kind,
             "media_type": self.media_type,
             "url": self.url,
+            "full_url": self.full_url,
             "decode_key": self.decode_key,
             "specs": self.specs,
+            "width": self.width,
+            "height": self.height,
             "file_size": self.file_size,
             "duration": self.duration,
             "title": self.title,
@@ -146,6 +186,7 @@ class ChannelFeed:
             "source_api": self.source_api,
             "status": self.status,
             "downloaded_paths": self.downloaded_paths,
+            "downloaded_quality": self.downloaded_quality,
             "error": self.error,
         }
 
@@ -170,8 +211,11 @@ class ChannelFeed:
             "create_time": self.create_time,
             "duration": self.duration,
             "file_size": self.file_size,
+            "quality_options": quality_options(self),
+            "has_original": self.has_original,
             "status": self.status,
             "downloaded_paths": self.downloaded_paths,
+            "downloaded_quality": _public_downloaded_quality(self.downloaded_quality),
             "error": self.error,
         }
 
@@ -207,10 +251,13 @@ def _feed_title(feed: Dict[str, Any], desc: Dict[str, Any]) -> str:
 
 
 def _feed_from_node(feed: Dict[str, Any], source_api: str) -> Optional[ChannelFeed]:
-    desc = feed.get("objectDesc") or {}
+    desc = feed.get("objectDesc")
     if not isinstance(desc, dict):
         return None
-    object_id = _as_str(feed.get("objectId"))
+    # 内嵌视频号详情/播放列表以 id 下发同一稳定标识；只有已经确认的
+    # objectDesc 节点才使用这个别名，避免把普通响应的通用 id 当作视频。
+    # _as_str 不经浮点转换，保留 uint64 字符串的每一位。
+    object_id = _as_str(feed.get("objectId")) or _as_str(feed.get("id"))
     nonce_id = _as_str(feed.get("objectNonceId"))
     if not object_id and not nonce_id:
         return None  # 结构不完整（改版 / 半截响应），交给下一条
@@ -273,13 +320,16 @@ def _feed_from_node(feed: Dict[str, Any], source_api: str) -> Optional[ChannelFe
 
     # 普通视频（mediaType=4 或未知类型但有可下载 media 的，宽松归入视频）。
     item.kind = "video"
-    item.url = _media_url(first)
+    item.full_url = _original_media_url(first)
+    item.url = _media_url(first) or item.full_url
     if not item.url:
         return None
     decode_key = _as_int(first.get("decodeKey"), 0)
     item.decode_key = decode_key or None
     specs = first.get("spec")
     item.specs = [s for s in specs if isinstance(s, dict)] if isinstance(specs, list) else []
+    item.width = max(0, _as_int(first.get("width")))
+    item.height = max(0, _as_int(first.get("height")))
     item.file_size = _as_int(first.get("fileSize"))
     item.duration = _as_int(first.get("videoPlayLen"))
     item.cover_url = _as_str(first.get("coverUrl"))
@@ -403,42 +453,183 @@ def clean_media_url(url: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(kept), parts.fragment))
 
 
-def _spec_height(spec: Dict[str, Any]) -> int:
-    # 部分转码档只有 width（竖屏视频），用 width 近似排序足够。
-    return _as_int(spec.get("height"), 0) or _as_int(spec.get("width"), 0)
+def _spec_format(spec: Dict[str, Any]) -> str:
+    value = _as_str(spec.get("fileFormat") or spec.get("file_format"))
+    return value if _FORMAT_RE.fullmatch(value) else ""
+
+
+def _spec_dimensions(spec: Dict[str, Any]) -> Tuple[int, int]:
+    return max(0, _as_int(spec.get("width"))), max(0, _as_int(spec.get("height")))
+
+
+def _spec_resolution(spec: Dict[str, Any]) -> int:
+    width, height = _spec_dimensions(spec)
+    # 单轴无法判断短边；不能把竖屏高度 1920 冒称为 1920p。
+    return min(width, height) if width and height else 0
+
+
+def _spec_rank(spec: Dict[str, Any]) -> Tuple[int, int, int, int]:
+    width, height = _spec_dimensions(spec)
+    bitrate = _as_int(
+        spec.get("bitrate") or spec.get("bitRate") or spec.get("bit_rate")
+        or spec.get("videoBitrate") or spec.get("video_bitrate")
+    )
+    size = _as_int(spec.get("fileSize") or spec.get("file_size"))
+    area = width * height if width and height else width or height
+    return _spec_resolution(spec), area, max(0, bitrate), max(0, size)
+
+
+def _usable_specs(feed: ChannelFeed) -> List[Dict[str, Any]]:
+    formats: Dict[str, Dict[str, Any]] = {}
+    for spec in feed.specs:
+        if not isinstance(spec, dict):
+            continue
+        # dynamicRangeType 非零是 HDR 规格；通用下载只选择兼容的 SDR 档。
+        if _as_int(spec.get("dynamicRangeType") or spec.get("dynamic_range_type")):
+            continue
+        format_id = _spec_format(spec)
+        if not format_id:
+            continue
+        old = formats.get(format_id)
+        if old is None or _spec_rank(spec) > _spec_rank(old):
+            formats[format_id] = spec
+    return sorted(formats.values(), key=_spec_rank, reverse=True)
+
+
+def _spec_label(spec: Dict[str, Any]) -> str:
+    width, height = _spec_dimensions(spec)
+    resolution = _spec_resolution(spec)
+    if width and height:
+        return f"{resolution}p · {width}×{height}"
+    if width:
+        return f"宽度{width}（高度未知）"
+    if height:
+        return f"高度{height}（宽度未知）"
+    return "已捕获档位（分辨率未知）"
+
+
+def _current_source_label(feed: ChannelFeed) -> str:
+    if feed.width or feed.height:
+        geometry = _spec_label({"width": feed.width, "height": feed.height})
+        return f"当前源 · {geometry}（未捕获其他画质档位）"
+    return "当前源（未捕获画质档位）"
+
+
+def _replace_quality_flag(url: str, format_id: str) -> str:
+    """只替换画质参数；其余签名的编码、大小写、顺序原样保留。"""
+    before_fragment, hash_sep, fragment = url.partition("#")
+    path, query_sep, query = before_fragment.partition("?")
+    output: List[str] = []
+    replaced = False
+    for item in query.split("&") if query_sep else []:
+        key = unquote(item.split("=", 1)[0]).lower()
+        if key == "x-snsvideoflag":
+            if not replaced:
+                output.append("X-snsvideoflag=" + format_id)
+                replaced = True
+        else:
+            output.append(item)
+    if not replaced:
+        output.append("X-snsvideoflag=" + format_id)
+    result = path + "?" + "&".join(output)
+    return result + hash_sep + fragment
+
+
+def quality_options(feed: ChannelFeed) -> List[Dict[str, Any]]:
+    """公开的安全画质菜单；不携带 URL、密钥或原始 spec。"""
+    if feed.kind != "video":
+        return []
+    usable = _usable_specs(feed)
+    options: List[Dict[str, Any]] = []
+    highest = usable[0] if usable else None
+    width, height = _spec_dimensions(highest) if highest is not None else (feed.width, feed.height)
+    label = "最高可用 · " + _spec_label(highest) if highest is not None else _current_source_label(feed)
+    options.append({"value": "highest", "label": label, "width": width, "height": height})
+    if feed.has_original:
+        options.append({"value": "original", "label": "原画（已捕获源文件）", "width": 0, "height": 0})
+    lowest = usable[-1] if usable else None
+    width, height = _spec_dimensions(lowest) if lowest is not None else (feed.width, feed.height)
+    label = "最低可用 · " + _spec_label(lowest) if lowest is not None else _current_source_label(feed)
+    options.append({"value": "lowest", "label": label, "width": width, "height": height})
+    labels: Dict[str, int] = {}
+    for spec in usable:
+        label = _spec_label(spec)
+        labels[label] = labels.get(label, 0) + 1
+    label_indices: Dict[str, int] = {}
+    for spec in usable:
+        width, height = _spec_dimensions(spec)
+        label = _spec_label(spec)
+        if labels[label] > 1:
+            label_indices[label] = label_indices.get(label, 0) + 1
+            label = f"{label} · 档位 {label_indices[label]}"
+        options.append({"value": "format:" + _spec_format(spec), "label": label,
+                        "width": width, "height": height})
+    return options
+
+
+def resolve_quality(feed: ChannelFeed, quality: str = "highest") -> Dict[str, Any]:
+    """返回同一次选择的下载 URL 与安全规格，供下载、完整性校验共用。"""
+    requested = _as_str(quality).strip() or "highest"
+    wanted = requested.lower()
+    current = {"url": feed.url, "value": "highest", "label": _current_source_label(feed),
+               "width": feed.width, "height": feed.height}
+    if feed.kind != "video":
+        return current
+    if wanted == "original" and feed.has_original:
+        return {"url": feed.full_url, "value": "original", "label": "原画（已捕获源文件）",
+                "width": 0, "height": 0}
+    if not feed.url:
+        return current
+    usable = _usable_specs(feed)
+    if not usable:
+        return current
+    target = usable[0]
+    value = "highest"
+    label_prefix = "最高可用 · "
+    if wanted == "lowest":
+        target = usable[-1]
+        value = "lowest"
+        label_prefix = "最低可用 · "
+    elif wanted.startswith("format:"):
+        # fileFormat 区分大小写，不能 lower() 后发送给 CDN。
+        format_id = requested[len("format:"):]
+        exact = next((s for s in usable if _spec_format(s) == format_id), None)
+        if exact is not None:
+            target = exact
+            value = "format:" + format_id
+            label_prefix = ""
+    else:
+        match = _QUALITY_RE.fullmatch(wanted)
+        if match:
+            goal = int(match.group(1))
+            # usable 按画质降序，同距离和同分辨率自动保留更好的规格。
+            known = [s for s in usable if _spec_resolution(s)]
+            if known:
+                target = min(known, key=lambda s: abs(_spec_resolution(s) - goal))
+                value = "format:" + _spec_format(target)
+                label_prefix = ""
+    width, height = _spec_dimensions(target)
+    return {"url": _replace_quality_flag(feed.url, _spec_format(target)), "value": value,
+            "label": label_prefix + _spec_label(target), "width": width, "height": height}
 
 
 def pick_quality_url(feed: ChannelFeed, quality: str = "highest") -> str:
-    """按画质档位构造视频下载 URL。
+    """最高档按短边/面积/码率/大小选择；原画只使用明确的 media.fullUrl。"""
+    return resolve_quality(feed, quality)["url"]
 
-    - ``highest`` / ``original`` / 空：微信下发的 media.url 即当前最佳版本
-      （客户端播放用的就是它），重建干净 URL 直接下载；
-    - ``lowest``：spec 里高度最低的档；
-    - 具体档位（``1080p`` / ``720p`` …）：取高度最接近的 spec 档；
-    - 指定档时把该档 ``fileFormat`` 作为 ``X-snsvideoflag`` 参数追加——微信
-      CDN 以此切换转码档（与 wx_channels_download 一致）。
 
-    spec 缺失或档位匹配失败时一律回退干净 URL，不失败。
-    """
-    if feed.kind != "video" or not feed.url:
-        return feed.url
-    wanted = (quality or "highest").strip().lower()
-    base = clean_media_url(feed.url)
-    if wanted in ("", "highest", "original"):
-        return base
-
-    usable = [s for s in feed.specs if _as_str(s.get("fileFormat"))]
-    if not usable:
-        return base
-    if wanted == "lowest":
-        target = min(usable, key=_spec_height)
-    else:
-        match = _QUALITY_RE.search(wanted)
-        if not match:
-            return base
-        goal = int(match.group(1))
-        target = min(usable, key=lambda s: abs(_spec_height(s) - goal))
-
-    flag = quote(_as_str(target.get("fileFormat")))
-    sep = "&" if "?" in base else "?"
-    return f"{base}{sep}X-snsvideoflag={flag}"
+def _public_downloaded_quality(value: Any) -> Dict[str, Any]:
+    if not isinstance(value, dict) or not value:
+        return {}
+    width, height = _spec_dimensions(value)
+    safe: Dict[str, Any] = {"width": width, "height": height,
+                           "label": _spec_label(value) if width or height else "画质未识别"}
+    for field_name in ("requested", "selected"):
+        text = _as_str(value.get(field_name))
+        if text in ("highest", "lowest", "original") or _QUALITY_RE.fullmatch(text):
+            safe[field_name] = text
+        elif text.startswith("format:") and _FORMAT_RE.fullmatch(text[len("format:"):]):
+            safe[field_name] = text
+        else:
+            safe[field_name] = ""
+    return safe

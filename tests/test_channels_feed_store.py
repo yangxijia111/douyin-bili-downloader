@@ -24,6 +24,39 @@ def _feed(object_id: str, *, url: str = "https://cdn/v.mp4", status: str = "pend
 
 
 class TestFeedStore:
+    def test_refreshes_original_and_quality_metadata_without_requeueing(self):
+        store = FeedStore()
+        existing = _feed("a", status="done")
+        store.add([existing])
+        store.clear_new_event()
+        refresh = _feed("a", url="https://cdn/fresh.mp4")
+        refresh.full_url = "https://cdn/fresh-original.mp4?token=fresh"
+        refresh.specs = [{"fileFormat": "hd", "width": 1920, "height": 1080}]
+        assert store.add([refresh]) == []
+        assert existing.full_url == refresh.full_url
+        assert existing.specs == refresh.specs
+        assert existing.status == "done" and not store.has_new
+        store.add([_feed("a")])
+        assert existing.full_url == refresh.full_url and existing.specs == refresh.specs
+
+    def test_sparse_refresh_keeps_high_specs_and_replaces_matching_metadata(self):
+        store = FeedStore()
+        existing = _feed("a", status="done")
+        existing.specs = [
+            {"fileFormat": "high", "width": 1920, "height": 1080},
+            {"fileFormat": "low", "width": 1280, "height": 720, "bitrate": 100},
+        ]
+        store.add([existing])
+        fresh = _feed("a", url="https://cdn/fresh.mp4?sign=fresh")
+        fresh.width, fresh.height = 1280, 720
+        fresh.specs = [{"fileFormat": "low", "width": 1280, "height": 720, "bitrate": 200}]
+        assert store.add([fresh]) == []
+        assert [s["fileFormat"] for s in existing.specs] == ["high", "low"]
+        assert existing.specs[1]["bitrate"] == 200
+        assert (existing.width, existing.height) == (1280, 720)
+        from channels.feed import pick_quality_url
+        assert pick_quality_url(existing) == fresh.url + "&X-snsvideoflag=high"
+
     def test_add_returns_only_fresh(self):
         store = FeedStore()
         fresh = store.add([_feed("a"), _feed("b")])
@@ -43,6 +76,22 @@ class TestFeedStore:
         store.get("nonce_a").status = "done"
         store.add([_feed("a")])
         assert store.get("nonce_a").status == "done"
+
+    def test_refresh_fills_original_metadata_without_lowering_duration(self):
+        store = FeedStore()
+        original = ChannelFeed(object_id="a", kind="video", title="a")
+        store.add([original])
+        full = ChannelFeed(object_id="a", kind="video", title="完整视频", author_name="作者",
+                           duration=23, file_size=500000, cover_url="https://cdn/cover.jpg")
+        assert store.add([full]) == []
+        assert store.get("a") is original
+        assert (original.title, original.author_name, original.duration, original.file_size) == (
+            "完整视频", "作者", 23, 500000,
+        )
+        assert original.cover_url == full.cover_url
+        store.add([ChannelFeed(object_id="a", kind="video", duration=6)])
+        assert original.duration == 23
+        assert len(store) == 1
 
     def test_get_by_id_variants(self):
         store = FeedStore()
@@ -225,3 +274,60 @@ class TestBoundedCache:
         assert len(store) <= 50
         # 索引规模与条目数一致。
         assert len(store._id_index) <= len(store) * 2
+
+
+def _media_flow(url: str = "https://finder.video.qq.com/251/20302/stodownload?encfilekey=abc&token=x&seq=3", *, status: int = 200, range_header: str = "", content_range: str = "", length: int = 1024):
+    """构造带 headers 的媒体分片假 flow（_record_media_request 只碰头部）。
+
+    headers 用普通 dict——产品代码走 ``headers.get(name)``，dict 原生 get
+    即可满足（缺键返回 None 与 mitmproxy Headers 行为一致）。
+    """
+    resp_headers = {
+        "content-range": content_range,
+        "content-type": "video/mp4",
+        "content-length": str(length),
+    }
+    return SimpleNamespace(
+        request=SimpleNamespace(
+            pretty_host="finder.video.qq.com",
+            path=url.split("?", 1)[1] if "?" in url else "/",
+            method="GET",
+            url=url,
+            headers={"range": range_header} if range_header else {},
+        ),
+        response=SimpleNamespace(
+            status_code=status,
+            headers=resp_headers,
+        ),
+    )
+
+
+class TestSnifferMediaRecording:
+    """媒体分片 URL 记录（直播回放全量下载依据）：只记头、不进 feed 通道。"""
+
+    def test_media_url_recorded(self):
+        store = FeedStore()
+        addon = SnifferAddon(store)
+        addon.response(_media_flow(range_header="bytes=0-1023", content_range="bytes 0-1023/9999999"))
+        snap = addon.diagnostics.snapshot()
+        assert snap["counters"]["media_requests"] == 1
+        assert snap["counters"]["media_request_bytes"] == 1024
+        assert len(snap["media_urls"]) == 1
+        entry = snap["media_urls"][0]
+        assert "encfilekey=abc" in entry["url"]
+        assert entry["range"] == "bytes=0-1023"
+        assert entry["status"] == 200
+
+    def test_media_host_does_not_create_feed(self):
+        # 媒体域响应不含 feed 标记，且不在解析白名单——store 必须为空。
+        store = FeedStore()
+        addon = SnifferAddon(store)
+        addon.response(_media_flow())
+        assert len(store) == 0
+
+    def test_non_media_flow_without_headers_still_safe(self):
+        # 旧式无 headers 属性的假 flow（非媒体域）不应因 _record_media_request 崩溃。
+        store = FeedStore()
+        addon = SnifferAddon(store)
+        addon.response(_flow("channels.weixin.qq.com", json.dumps(_payload(["1"]))))
+        assert len(store) == 1

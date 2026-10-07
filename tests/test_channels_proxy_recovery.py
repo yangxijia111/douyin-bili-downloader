@@ -6,7 +6,11 @@
 
 from __future__ import annotations
 
+import base64
+import ctypes
+import json
 import sys
+from types import SimpleNamespace
 from typing import Any, Dict
 
 import pytest
@@ -197,3 +201,309 @@ def test_pid_alive_rejects_garbage():
     assert pid_alive(0) is False
     assert pid_alive(-1) is False
     assert pid_alive("not-a-pid") is False
+
+
+@pytest.fixture
+def windows_backend(monkeypatch):
+    """WinINET + 注册表的内存替身，包括曾不同步的 Connections 二进制值。"""
+    import channels.proxy_recovery as module
+
+    key_path = WindowsProxyBackend.KEY_PATH
+    values = {
+        key_path: {
+            "ProxyEnable": 1,
+            "ProxyServer": "127.0.0.1:8899",
+            "ProxyOverride": "top-level-original",
+            "AutoConfigURL": "https://proxy.example/original.pac",
+        },
+        key_path + r"\Connections": {
+            "DefaultConnectionSettings": b"default-7897-original",
+            "SavedLegacySettings": b"legacy-7897-original",
+        },
+    }
+
+    class Key:
+        def __init__(self, path):
+            self.path = path
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def query(key, name):
+        if name not in values[key.path]:
+            raise FileNotFoundError(name)
+        value = values[key.path][name]
+        return value, 3 if isinstance(value, bytes) else 1
+
+    def delete(key, name):
+        if name not in values[key.path]:
+            raise FileNotFoundError(name)
+        del values[key.path][name]
+
+    registry = SimpleNamespace(
+        HKEY_CURRENT_USER=1, KEY_SET_VALUE=2, REG_BINARY=3, REG_DWORD=4, REG_SZ=1,
+        OpenKey=lambda root, path, *args: Key(path),
+        CreateKeyEx=lambda root, path, *args: Key(path),
+        QueryValueEx=query,
+        SetValueEx=lambda key, name, reserved, kind, value: values[key.path].__setitem__(
+            name, value
+        ),
+        DeleteValue=delete,
+    )
+    monkeypatch.setitem(sys.modules, "winreg", registry)
+
+    class Api:
+        def __init__(self):
+            self.options = {
+                "flags": 15,
+                "server": "127.0.0.1:7897",
+                "bypass": "connection-original",
+                "auto_config": "https://proxy.example/original.pac",
+            }
+            self.calls = []
+            self.fail = None
+            self.query_flags_ui_fails = False
+            self.buffers = {}
+            self.freed = []
+
+        def InternetSetOptionW(self, handle, option, buffer, size):
+            self.calls.append(option)
+            if self.fail == option:
+                return False
+            if option == 75:
+                option_list = ctypes.cast(
+                    buffer, ctypes.POINTER(module._InternetPerConnOptionListW)
+                ).contents
+                assert not handle and not option_list.pszConnection
+                assert size == ctypes.sizeof(module._InternetPerConnOptionListW)
+                for index in range(option_list.dwOptionCount):
+                    item = option_list.pOptions[index]
+                    if item.dwOption == 1:
+                        self.options["flags"] = item.Value.dwValue
+                    else:
+                        name = {2: "server", 3: "bypass", 4: "auto_config"}[item.dwOption]
+                        self.options[name] = ctypes.wstring_at(item.Value.pszValue)
+                top = values[key_path]
+                top["ProxyEnable"] = int(bool(self.options["flags"] & 2))
+                top["ProxyServer"] = self.options["server"]
+                top["ProxyOverride"] = self.options["bypass"]
+                top["AutoConfigURL"] = self.options["auto_config"]
+                blob = json.dumps(self.options, sort_keys=True).encode()
+                for name in values[key_path + r"\Connections"]:
+                    values[key_path + r"\Connections"][name] = blob
+            return True
+
+        def InternetQueryOptionW(self, handle, option, buffer, size):
+            option_list = ctypes.cast(
+                buffer, ctypes.POINTER(module._InternetPerConnOptionListW)
+            ).contents
+            if self.query_flags_ui_fails and option_list.pOptions[0].dwOption == 10:
+                return False
+            for index in range(option_list.dwOptionCount):
+                item = option_list.pOptions[index]
+                if item.dwOption in (1, 10):
+                    item.Value.dwValue = self.options["flags"]
+                else:
+                    name = {2: "server", 3: "bypass", 4: "auto_config"}[item.dwOption]
+                    text_buffer = ctypes.create_unicode_buffer(self.options[name])
+                    address = ctypes.addressof(text_buffer)
+                    self.buffers[address] = text_buffer
+                    item.Value.pszValue = address
+            return True
+
+        def free(self, address):
+            self.freed.append(address)
+            self.buffers.pop(address)
+
+    api = Api()
+    monkeypatch.setattr(module, "_wininet_library", lambda: api, raising=False)
+    monkeypatch.setattr(module, "_free_global", api.free, raising=False)
+    # 旧实现直接使用 windll，同样截获，red 测试也不能触碰真机设置。
+    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(Wininet=api), raising=False)
+    return WindowsProxyBackend(), api, values
+
+
+def test_wininet_proxy_sync_and_exact_restore(windows_backend, tmp_path):
+    backend, api, values = windows_backend
+    before = {path: dict(entries) for path, entries in values.items()}
+    effective_before = dict(api.options)
+    recovery = ProxyRecovery(tmp_path)
+    manager = SystemProxyManager(backend=backend, recovery=recovery)
+
+    manager.enable(port=8899)
+    assert api.options["server"] == "127.0.0.1:8899"
+    assert api.options["flags"] == 3  # 嗅探期间不能再被 PAC / 自动检测绕过。
+    assert api.options["auto_config"] == effective_before["auto_config"]
+    assert api.calls[:3] == [75, 39, 37]
+    record = recovery.load()
+    assert record["previous"]["connection_settings"]["DefaultConnectionSettings"] == (
+        base64.b64encode(b"default-7897-original").decode("ascii")
+    )
+
+    manager.restore()
+    assert values == before  # 顶层与两个连接值按原状态逐字节恢复，即使原来不一致。
+    assert api.options == effective_before
+    assert recovery.load() is None
+    assert not api.buffers  # WinINET 返回的字符串内存全部 GlobalFree。
+
+
+def test_connection_only_user_edit_is_kept_on_stop(windows_backend, tmp_path):
+    backend, api, values = windows_backend
+    recovery = ProxyRecovery(tmp_path)
+    manager = SystemProxyManager(backend=backend, recovery=recovery)
+    manager.enable(port=8899)
+    values[backend.KEY_PATH + r"\Connections"]["DefaultConnectionSettings"] = b"user-edit"
+    current = backend.snapshot()
+    manager.restore()
+    assert backend.snapshot() == current
+    assert recovery.load() is None
+
+
+def test_connection_only_user_edit_is_kept_after_crash(windows_backend, tmp_path):
+    backend, api, values = windows_backend
+    recovery = ProxyRecovery(tmp_path)
+    SystemProxyManager(backend=backend, recovery=recovery).enable(port=8899)
+    values[backend.KEY_PATH + r"\Connections"]["SavedLegacySettings"] = b"user-edit"
+    current = backend.snapshot()
+    assert recover_stale_proxy(backend=backend, recovery=recovery)["action"] == "kept"
+    assert backend.snapshot() == current
+
+
+@pytest.mark.parametrize("failed_option", [75, 39, 37])
+def test_wininet_enable_failure_rolls_back_and_preserves_recovery(
+    windows_backend, tmp_path, failed_option
+):
+    backend, api, values = windows_backend
+    before = {path: dict(entries) for path, entries in values.items()}
+    recovery = ProxyRecovery(tmp_path)
+    manager = SystemProxyManager(backend=backend, recovery=recovery)
+    api.fail = failed_option
+    with pytest.raises(OSError, match="WinINET"):
+        manager.enable(port=8899)
+    # 通知失败后的回滚仍须恢复原始 registry blobs，失败记录保留以便再试。
+    if failed_option in (39, 37):
+        assert values == before
+    assert recovery.load() is not None
+    api.fail = None
+    manager.restore()
+    assert values == before
+    assert recovery.load() is None
+
+
+def test_effective_proxy_flags_ui_fallback_and_string_free(windows_backend):
+    backend, api, values = windows_backend
+    api.query_flags_ui_fails = True
+    assert backend.effective_proxy() == {
+        "enabled": True,
+        "flags": 15,
+        "server": "127.0.0.1:7897",
+        "bypass": "connection-original",
+        "auto_config": "https://proxy.example/original.pac",
+    }
+    assert not api.buffers
+
+
+def test_version_one_recovery_record_remains_supported(env):
+    recovery, backend = env["recovery"], env["backend"]
+    recovery.state_dir.mkdir(parents=True, exist_ok=True)
+    recovery.state_path.write_text(json.dumps({
+        "version": 1, "pid": 0, "proxy": "127.0.0.1:8899",
+        "previous": {"ProxyEnable": 0, "ProxyServer": None, "ProxyOverride": None},
+    }), encoding="utf-8")
+    backend.values.update({"ProxyEnable": 1, "ProxyServer": "127.0.0.1:8899"})
+    assert recover_stale_proxy(backend=backend, recovery=recovery)["action"] == "restored"
+    assert backend.values["ProxyEnable"] == 0
+
+
+def test_wininet_crash_recovery_restores_full_previous_settings(windows_backend, tmp_path):
+    backend, api, values = windows_backend
+    before = {path: dict(entries) for path, entries in values.items()}
+    effective_before = dict(api.options)
+    recovery = ProxyRecovery(tmp_path)
+    SystemProxyManager(backend=backend, recovery=recovery).enable(port=8899)
+    assert recovery.load()["version"] == 2
+    assert recover_stale_proxy(backend=backend, recovery=recovery)["action"] == "restored"
+    assert values == before
+    assert api.options == effective_before
+
+
+def test_wininet_restore_notification_failure_can_be_retried(windows_backend, tmp_path):
+    backend, api, values = windows_backend
+    before = {path: dict(entries) for path, entries in values.items()}
+    recovery = ProxyRecovery(tmp_path)
+    manager = SystemProxyManager(backend=backend, recovery=recovery)
+    manager.enable(port=8899)
+    api.fail = 37
+    manager.restore()
+    assert values == before
+    assert manager.active
+    assert recovery.load() is not None
+    api.fail = None
+    manager.restore()
+    assert not manager.active
+    assert recovery.load() is None
+
+
+def test_wininet_restore_notification_failure_recovers_after_crash(windows_backend, tmp_path):
+    backend, api, values = windows_backend
+    before = {path: dict(entries) for path, entries in values.items()}
+    recovery = ProxyRecovery(tmp_path)
+    manager = SystemProxyManager(backend=backend, recovery=recovery)
+    manager.enable(port=8899)
+    api.fail = 39
+    manager.restore()
+    api.fail = None
+    assert recover_stale_proxy(backend=backend, recovery=recovery)["action"] == "restored"
+    assert values == before
+
+
+def test_user_pac_change_is_kept_on_stop(windows_backend, tmp_path):
+    backend, api, values = windows_backend
+    recovery = ProxyRecovery(tmp_path)
+    manager = SystemProxyManager(backend=backend, recovery=recovery)
+    manager.enable(port=8899)
+    api.options["auto_config"] = "https://proxy.example/user-new.pac"
+    api.options["flags"] = 4
+    current = backend.snapshot()
+    manager.restore()
+    assert backend.snapshot() == current
+    assert recovery.load() is None
+
+
+def test_missing_proxy_registry_values_remain_missing(windows_backend, tmp_path):
+    backend, api, values = windows_backend
+    del values[backend.KEY_PATH]["AutoConfigURL"]
+    del values[backend.CONNECTIONS_PATH]["SavedLegacySettings"]
+    before = {path: dict(entries) for path, entries in values.items()}
+    manager = SystemProxyManager(backend=backend, recovery=ProxyRecovery(tmp_path))
+    manager.enable(port=8899)
+    manager.restore()
+    assert values == before
+
+
+def test_recovery_persist_failure_does_not_change_system_proxy(windows_backend, tmp_path):
+    backend, api, values = windows_backend
+
+    class FailingRecovery(ProxyRecovery):
+        def save(self, **kwargs):
+            raise OSError("cannot persist recovery")
+
+    before = {path: dict(entries) for path, entries in values.items()}
+    manager = SystemProxyManager(backend=backend, recovery=FailingRecovery(tmp_path))
+    with pytest.raises(OSError, match="persist"):
+        manager.enable(port=8899)
+    assert not manager.active
+    assert values == before
+    assert api.calls == []
+
+
+def test_corrupt_connection_backup_does_not_mutate_system_proxy(windows_backend):
+    backend, api, values = windows_backend
+    snapshot = backend.snapshot()
+    snapshot["connection_settings"]["DefaultConnectionSettings"] = "!!!not base64"
+    with pytest.raises(OSError, match="备份损坏"):
+        backend.write(snapshot)
+    assert api.calls == []

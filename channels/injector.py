@@ -63,6 +63,7 @@ CHANNELS_PAGE_PATH_RE: Pattern[str] = re.compile(
 VIRTUAL_CSS_PATH = "/__cuin/assets/channels.css"
 VIRTUAL_JS_PATH = "/__cuin/assets/bootstrap.js"
 VIRTUAL_CORE_JS_PATH = "/__cuin/assets/cuin_core.js"
+VIRTUAL_MEDIA_JS_PATH = "/__cuin/assets/media_source.js"
 
 # 幂等标记：bootstrap 运行时会写 window.__CUIN__，HTML 里以 data 属性标记。
 INJECT_MARKER = "data-cuin-injected"
@@ -152,6 +153,7 @@ def inject_bootstrap(html: str, *, js_path: str = VIRTUAL_JS_PATH,
     snippet = (
         f'<link rel="stylesheet" href="{css_path}" {INJECT_MARKER}="1">'
         f'<script src="{core_js_path}" {INJECT_MARKER}="1"{nonce_attr}></script>'
+        f'<script src="{VIRTUAL_MEDIA_JS_PATH}" {INJECT_MARKER}="1"{nonce_attr}></script>'
         f'<script src="{js_path}" {INJECT_MARKER}="1"{nonce_attr}></script>'
     )
     head_match = _HEAD_RE.search(html)
@@ -176,25 +178,97 @@ class InjectorAddon:
         self.allowed_suffixes = tuple(allowed_suffixes) or ("weixin.qq.com",)
         self.inject_enabled = inject_enabled
         self.patch_registry = patch_registry
+        self._proxy_connections: set = set()
+        self._connect_connections: set = set()
+        self._target_connections: set = set()
+        self._tls_connections: set = set()
+        self._tls_failed_connections: set = set()
 
     # ------------------------------------------------------------------
     # 连接级计数（诊断阶梯第 1–3 级）
     # ------------------------------------------------------------------
 
-    def client_connected(self, data) -> None:
-        """任何客户端 TCP 连接（微信走了代理就会触发）。"""
-        self.diagnostics.incr("proxy_connections")
+    def client_connected(self, client) -> None:
+        """任何应用的客户端 TCP 连接；此计数不能单独证明微信经过代理。"""
+        key = self._connection_key(client)
+        if key not in self._proxy_connections:
+            self._proxy_connections.add(key)
+            self.diagnostics.incr("proxy_connections")
+
+    def client_disconnected(self, client) -> None:
+        key = self._connection_key(client)
+        for counted in (
+            self._proxy_connections, self._connect_connections, self._target_connections,
+            self._tls_connections, self._tls_failed_connections,
+        ):
+            counted.discard(key)
+
+    def http_connect(self, flow) -> None:
+        """记录 CONNECT 主机；IP 目标的实际域名稍后由 SNI 补充。"""
+        client = flow.client_conn
+        key = self._connection_key(client)
+        if key not in self._connect_connections:
+            self._connect_connections.add(key)
+            self.diagnostics.incr("connect_requests")
+        self._observe_host(client, flow.request.host or "", source="connect")
 
     def server_connect(self, data) -> None:
-        """上游连接：白名单域命中计数；443 端口即被 TLS 中间人。"""
+        """上游地址用于目标识别；连到 443 不代表 TLS 握手已成功。"""
         try:
-            host, port = data.server.address
+            host = data.server.address[0]
         except Exception:  # noqa: BLE001 —— 地址信息异常不影响代理
             return
-        if should_intercept_host(str(host), self.allowed_suffixes):
+        self._observe_host(getattr(data, "client", data.server), str(host), source="server")
+
+    @staticmethod
+    def _connection_key(client) -> str:
+        return str(getattr(client, "id", id(client)))
+
+    def _record_target(self, client, host: str) -> None:
+        if not should_intercept_host(host, self.allowed_suffixes):
+            return
+        key = self._connection_key(client)
+        if key not in self._target_connections:
+            self._target_connections.add(key)
             self.diagnostics.incr("target_domain_connections")
-            if int(port) == 443:
-                self.diagnostics.incr("tls_intercepted")
+
+    def _observe_host(self, client, host: str, *, source: str) -> None:
+        host = str(host or "")
+        self.diagnostics.record_host(
+            host, source=source, target=should_intercept_host(host, self.allowed_suffixes)
+        )
+        self._record_target(client, host)
+
+    def tls_clienthello(self, data) -> None:
+        """IP CONNECT 也通过 ClientHello 的 SNI 识别视频号目标连接。"""
+        self._observe_host(data.context.client, data.client_hello.sni or "", source="sni")
+
+    def requestheaders(self, flow) -> None:
+        """HTTP Host 作为第三种主机证据；不读取路径、查询参数或正文。"""
+        self._observe_host(flow.client_conn, flow.request.pretty_host or "", source="http")
+
+    def _tls_connection_key(self, data) -> str:
+        client = data.context.client
+        self._observe_host(client, getattr(client, "sni", "") or "", source="tls")
+        server = data.context.server
+        self._observe_host(client, getattr(server, "sni", "") or "", source="tls")
+        if getattr(server, "address", None):
+            self._observe_host(client, str(server.address[0]), source="tls")
+        return self._connection_key(client)
+
+    def tls_established_client(self, data) -> None:
+        """仅目标连接的客户端 TLS 握手成功后点亮解密阶段。"""
+        key = self._tls_connection_key(data)
+        if key in self._target_connections and key not in self._tls_connections:
+            self._tls_connections.add(key)
+            self.diagnostics.incr("tls_intercepted")
+
+    def tls_failed_client(self, data) -> None:
+        """单独记录目标连接的 TLS 失败，避免把证书拒绝显示为成功解密。"""
+        key = self._tls_connection_key(data)
+        if key in self._target_connections and key not in self._tls_failed_connections:
+            self._tls_failed_connections.add(key)
+            self.diagnostics.incr("tls_client_failures")
 
     # ------------------------------------------------------------------
     # 响应处理

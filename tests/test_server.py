@@ -175,3 +175,93 @@ async def test_job_manager_prunes_by_ttl():
     remaining_ids = {j.job_id for j in await manager.list_jobs()}
     assert old_job.job_id not in remaining_ids
     assert new_job.job_id in remaining_ids
+
+
+def test_fs_dirs_lists_subdirectories_only(tmp_path):
+    """目录浏览接口：只返回子目录名，不含文件。"""
+    (tmp_path / "sub_a").mkdir()
+    (tmp_path / "sub_b").mkdir()
+    (tmp_path / "note.txt").write_text("x", encoding="utf-8")
+
+    config = ConfigLoader(None)
+    config.update(path=str(tmp_path))
+    app = build_app(config)
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/fs/dirs", params={"path": str(tmp_path)})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["path"] == str(tmp_path.resolve())
+        assert body["parent"] is not None
+        assert "sub_a" in body["dirs"]
+        assert "sub_b" in body["dirs"]
+        # 文件不出现在结果里
+        assert "note.txt" not in body["dirs"]
+        assert body["error"] is None
+
+
+def test_fs_dirs_empty_path_returns_root_level(tmp_path):
+    """空路径 = 根层级：Windows 返回盘符列表，POSIX 返回 / 的子目录。"""
+    config = ConfigLoader(None)
+    config.update(path=str(tmp_path))
+    app = build_app(config)
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/fs/dirs")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert isinstance(body["dirs"], list)
+
+
+def test_fs_dirs_rejects_bad_paths(tmp_path):
+    """不存在的路径 404；文件路径 400；相对路径 400。"""
+    config = ConfigLoader(None)
+    config.update(path=str(tmp_path))
+    app = build_app(config)
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/fs/dirs", params={"path": str(tmp_path / "no_such_dir")})
+        assert resp.status_code == 404
+
+        a_file = tmp_path / "a_file.txt"
+        a_file.write_text("x", encoding="utf-8")
+        resp = client.get("/api/v1/fs/dirs", params={"path": str(a_file)})
+        assert resp.status_code == 400
+
+        resp = client.get("/api/v1/fs/dirs", params={"path": "relative/path"})
+        assert resp.status_code == 400
+
+
+def test_fs_dirs_reports_permission_error(tmp_path):
+    """无权限目录不炸接口：返回 error 提示而不是 500。"""
+    config = ConfigLoader(None)
+    config.update(path=str(tmp_path))
+    app = build_app(config)
+
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    resp_code = None
+    try:
+        locked.chmod(0o000)
+    except OSError:  # pragma: no cover - Windows 上 chmod 不完全生效
+        pass
+
+    import sys as _sys
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/fs/dirs", params={"path": str(locked)})
+        resp_code = resp.status_code
+
+    if _sys.platform.startswith("win"):
+        # Windows 的 chmod 只读位不阻止列目录，行为取决于环境，只要求不 5xx
+        assert resp_code == 200
+    else:
+        body = resp.json()
+        assert resp_code == 200
+        assert body["error"] is not None
+        assert body["dirs"] == []
+    # 恢复权限，方便 tmp_path 清理
+    try:
+        locked.chmod(0o755)
+    except OSError:  # pragma: no cover
+        pass

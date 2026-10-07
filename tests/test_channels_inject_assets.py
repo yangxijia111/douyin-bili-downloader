@@ -74,14 +74,27 @@ class TestBootstrapContract:
         assert "window.CUIN_CORE" in js
 
     def test_no_external_urls(self):
-        """注入 JS 不得引用任何外部 URL（同源虚拟资源除外）。"""
+        """注入 JS 不得引用任何外部 URL（同源虚拟资源除外）。
+
+        白名单：channels.weixin.qq.com/web/pages/feed 是 Strategy F 的
+        WeixinJSBridge.openUrlWithExtraWebview 跳转目标（发给微信原生桥，
+        非资源加载），且仍属微信自家域。
+        """
+        allowed_prefixes = (
+            "https://channels.weixin.qq.com/web/pages/feed",
+        )
         for name in ASSET_FILES:
             if not name.endswith(".js"):
                 continue
             js = _read(name)
             # 允许 /__cuin/ 同源路径；禁止 http(s) 绝对地址。
             external = re.findall(r"""["'(]https?://[^"')]+""", js)
-            assert not external, f"{name} 引用了外部 URL: {external}"
+            strip_chars = "\"'("
+            unexpected = [
+                u for u in external
+                if not any(u.lstrip(strip_chars).startswith(p) for p in allowed_prefixes)
+            ]
+            assert not unexpected, f"{name} 引用了外部 URL: {unexpected}"
 
     def test_page_type_coverage_aligned(self):
         """JS detectPageType 与 Python 路径正则覆盖同一组页面。"""

@@ -11,6 +11,7 @@ asyncio 任务停止录制，ffmpeg 收到 terminate 后写出文件尾部。
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -55,10 +56,17 @@ class LiveRecorder:
             str(output_path),
         ]
         logger.info("开始录制直播: %s", output_path.name)
+        # 视频号直接拉流；只清理 FFmpeg 子进程继承的代理变量，避免
+        # HTTP(S)/SOCKS 请求被环境中的 Clash 代理接管。父进程环境不变。
+        child_env = {
+            key: value for key, value in os.environ.items()
+            if key.lower() not in ("http_proxy", "https_proxy", "all_proxy")
+        }
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
+            env=child_env,
         )
         try:
             _, stderr = await proc.communicate()

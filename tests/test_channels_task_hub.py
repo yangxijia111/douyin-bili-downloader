@@ -61,7 +61,6 @@ class _FakeDownloader:
 
     async def download_cover(self, feed):
         self.cover_calls.append(feed.feed_id)
-        feed.downloaded_paths = ["/tmp/cover.jpg"]
         return ["/tmp/cover.jpg"]
 
 
@@ -83,6 +82,7 @@ class TestDownload:
         assert record["status"] == "done"
         assert record["paths"] == ["/tmp/out.mp4"]
         assert stats.success == 1
+        assert stats.total == 1
         # manual=True（页面按钮跳过增量判重）。
         assert downloader.calls[0]["manual"] is True
         # feed 状态同步到 Web 控制台可见的列表。
@@ -110,6 +110,41 @@ class TestDownload:
         assert downloader.calls == []  # 不走整片下载
         record = hub.status(list(hub._records)[0])
         assert record["status"] == "done"
+
+    @pytest.mark.asyncio
+    async def test_cover_preserves_video_status_and_paths(self):
+        store = FeedStore()
+        feed = _video_feed()
+        feed.status = "done"
+        feed.downloaded_paths = ["/tmp/existing.mp4"]
+        store.add([feed])
+        hub = ChannelsTaskHub(store, _FakeDownloader())
+        task_id = hub.submit(feed.feed_id, action="cover")
+        await _wait_idle(hub)
+        assert hub.status(task_id)["paths"] == ["/tmp/cover.jpg"]
+        assert feed.status == "done"
+        assert feed.downloaded_paths == ["/tmp/existing.mp4"]
+
+    @pytest.mark.asyncio
+    async def test_cover_leaves_pending_video_available_for_download(self):
+        store = FeedStore()
+        feed = _video_feed()
+        store.add([feed])
+        hub = ChannelsTaskHub(store, _FakeDownloader())
+        hub.submit(feed.feed_id, action="cover")
+        await _wait_idle(hub)
+        assert feed.status == "pending"
+        assert feed.downloaded_paths == []
+
+    @pytest.mark.asyncio
+    async def test_skipped_task_is_counted(self):
+        store = FeedStore()
+        store.add([_video_feed()])
+        stats = DownloadResult()
+        hub = ChannelsTaskHub(store, _FakeDownloader(result="skipped"), stats)
+        hub.submit(store.all()[0].feed_id)
+        await _wait_idle(hub)
+        assert stats.total == stats.skipped == 1
 
     @pytest.mark.asyncio
     async def test_failed_download(self):
@@ -192,6 +227,35 @@ class TestLiveRecording:
 
 
 class TestSessionCleanup:
+    @pytest.mark.asyncio
+    async def test_cancel_before_task_starts_releases_and_marks_stopped(self):
+        store = FeedStore()
+        store.add([_video_feed()])
+        hub = ChannelsTaskHub(store, _FakeDownloader())
+        feed_id = store.all()[0].feed_id
+        first = hub.submit(feed_id)
+        hub.cancel_all()
+        await _wait_idle(hub)
+        assert hub.status(first)["status"] == "stopped"
+        assert store.all()[0].status == "pending"
+        second = hub.submit(feed_id)
+        assert second != first
+        await _wait_idle(hub)
+
+    @pytest.mark.asyncio
+    async def test_stop_before_live_task_starts_marks_stopped_and_allows_retry(self):
+        store = FeedStore()
+        store.add([_live_feed()])
+        hub = ChannelsTaskHub(store, _FakeDownloader())
+        feed_id = store.all()[0].feed_id
+        first = hub.submit(feed_id, action="record")
+        hub.submit(feed_id, action="stop")
+        await _wait_idle(hub)
+        assert hub.status(first)["status"] == "stopped"
+        second = hub.submit(feed_id, action="record")
+        assert second != first
+        await _wait_idle(hub)
+
     @pytest.mark.asyncio
     async def test_cancel_all(self):
         store = FeedStore()

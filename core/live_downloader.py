@@ -7,7 +7,7 @@
 - 选择最高清可用的流，优先 FLV（单文件落盘简单）
 - 使用 aiohttp 分块写入到 `.flv` 临时文件，完成后原子重命名
 - 时长限制：read_timeout 自然结束或 max_duration_seconds 触发
-- 不依赖 ffmpeg；若用户需要转码可后处理
+- FLV 直接保存；HLS 使用 ffmpeg 录制分片为可播放的 TS 文件
 
 限制：
 - 不处理多人房间 / 连麦切换
@@ -28,6 +28,7 @@ import aiofiles
 import aiohttp
 
 from core.downloader_base import BaseDownloader, DownloadResult
+from core.ffmpeg import resolve_ffmpeg_path
 from utils.logger import setup_logger
 from utils.naming import (
     DEFAULT_FILE_TEMPLATE,
@@ -110,16 +111,8 @@ class LiveDownloader(BaseDownloader):
             logger.debug("Save room meta failed: %s", exc)
 
         is_hls = ".m3u8" in stream_url.split("?")[0]
-        suffix = ".flv" if not is_hls else ".m3u8"
+        suffix = ".flv" if not is_hls else ".ts"
         target_path = save_dir / f"{file_stem}{suffix}"
-        if is_hls:
-            # HLS 源只会下载 playlist（m3u8 文本），不是可直接播放的视频文件。
-            # 告知用户正确的后处理方式。
-            logger.warning(
-                "选中的直播源为 HLS（m3u8 playlist），保存的将是播放列表文本而非视频。"
-                "如需可播放文件，请用 ffmpeg 基于该 URL 抓流：ffmpeg -i '%s' -c copy out.ts",
-                stream_url,
-            )
 
         live_cfg = self._live_config()
         max_duration = float(live_cfg.get("max_duration_seconds") or 0)
@@ -131,13 +124,15 @@ class LiveDownloader(BaseDownloader):
             f"quality={quality} | -> {target_path.name}",
         )
 
-        ok = await self._record_stream(
-            stream_url,
-            target_path,
-            max_duration=max_duration,
-            chunk_size=chunk_size,
-            idle_timeout=idle_timeout,
-        )
+        if is_hls:
+            ok = await self._record_hls_stream(
+                stream_url, target_path, max_duration=max_duration, idle_timeout=idle_timeout,
+            )
+        else:
+            ok = await self._record_stream(
+                stream_url, target_path, max_duration=max_duration,
+                chunk_size=chunk_size, idle_timeout=idle_timeout,
+            )
 
         if ok:
             result.success += 1
@@ -230,6 +225,66 @@ class LiveDownloader(BaseDownloader):
 
         return None, ""
 
+    async def _record_hls_stream(
+        self,
+        url: str,
+        target_path: Path,
+        *,
+        max_duration: float,
+        idle_timeout: float,
+    ) -> bool:
+        ffmpeg = resolve_ffmpeg_path()
+        if not ffmpeg:
+            detail = "HLS 直播录制需要 ffmpeg，请配置 ffmpeg 后重试"
+            logger.error(detail)
+            self._progress_update_step("直播录制失败", detail)
+            return False
+        tmp_path = target_path.with_suffix(target_path.suffix + ".tmp")
+        headers = self._download_headers()
+        headers.update(Referer="https://live.douyin.com/", Origin="https://live.douyin.com")
+        args = [
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+            "-rw_timeout", str(int(max(1.0, idle_timeout) * 1_000_000)),
+            "-headers", "".join(f"{key}: {value}\r\n" for key, value in headers.items()),
+        ]
+        proxy = getattr(self.api_client, "proxy", None)
+        if proxy:
+            args.extend(["-http_proxy", proxy])
+        args.extend(["-i", url])
+        if max_duration > 0:
+            args.extend(["-t", str(max_duration)])
+        args.extend(["-map", "0:v:0?", "-map", "0:a:0?", "-c", "copy", "-f", "mpegts", str(tmp_path)])
+        process = None
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *args, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            )
+            timeout = max_duration + max(1.0, idle_timeout) + 10 if max_duration > 0 else None
+            await asyncio.wait_for(process.communicate(), timeout=timeout)
+            if process.returncode == 0 and tmp_path.is_file() and tmp_path.stat().st_size > 0:
+                os.replace(str(tmp_path), str(target_path))
+                return True
+            logger.error("HLS live recording failed (ffmpeg exit=%s)", process.returncode)
+            return False
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("HLS live recording failed: %s", type(exc).__name__)
+            return False
+        finally:
+            if process is not None and process.returncode is None:
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await process.wait()
+            # Keep partial media after interruption, matching FLV recording.
+            if tmp_path.is_file() and tmp_path.stat().st_size > 0:
+                os.replace(str(tmp_path), str(target_path))
+            elif tmp_path.exists():
+                tmp_path.unlink()
+
     async def _record_stream(
         self,
         url: str,
@@ -280,11 +335,15 @@ class LiveDownloader(BaseDownloader):
             return True
 
         session = await self.api_client.get_session()
+        proxy_kwargs = {}
+        if getattr(self.api_client, "proxy", None):
+            proxy_kwargs["proxy"] = self.api_client.proxy
         try:
             async with session.get(
                 url,
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=None, sock_read=idle_timeout),
+                **proxy_kwargs,
             ) as resp:
                 if resp.status != 200:
                     logger.error("Live stream HTTP %s for %s", resp.status, target_path.name)

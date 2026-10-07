@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, List, Optional, Set
 
 import aiofiles
 
+from core.api_client import LoginRequiredError
 from core.downloader_base import BaseDownloader, DownloadResult
 from core.metadata import build_author_home_url
 from core.user_mode_registry import UserModeRegistry
@@ -104,6 +105,8 @@ class UserDownloader(BaseDownloader):
         self._progress_update_step("识别账号", "解析当前登录账号主页")
         try:
             self_info = await self.api_client.get_self_info()
+        except LoginRequiredError:
+            raise
         except Exception as exc:  # noqa: BLE001 - 任何失败都归为"解析不出账号"
             logger.warning("Resolve /user/self failed: %s", exc)
             self_info = None

@@ -67,11 +67,11 @@ class URLParser:
 
     @staticmethod
     def _extract_video_id(url: str) -> Optional[str]:
-        match = re.search(r"/video/(\d+)", url)
-        if match:
-            return match.group(1)
-
-        match = re.search(r"modal_id=(\d+)", url)
+        parsed = urlparse(url)
+        modal_ids = parse_qs(parsed.query).get("modal_id", [])
+        if modal_ids and modal_ids[0].strip().isdigit():
+            return modal_ids[0].strip()
+        match = re.search(r"/video/(\d+)", parsed.path)
         if match:
             return match.group(1)
 

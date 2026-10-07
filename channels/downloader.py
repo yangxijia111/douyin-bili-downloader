@@ -28,10 +28,12 @@ from urllib.parse import urlsplit
 
 import aiofiles
 import aiohttp
+from yarl import URL
 
-from channels.feed import ChannelFeed, pick_quality_url
+from channels.feed import ChannelFeed, resolve_quality
 from channels.isaac64 import ENCRYPTED_HEADER_SIZE, Isaac64Cipher, is_mp4_header
 from channels.live import LiveRecorder
+from channels.media_validation import probe_video_quality
 from config import ConfigLoader
 from core.downloader_base import DownloadResult
 from storage import Database, FileManager
@@ -60,6 +62,9 @@ _HEADERS = {
 
 # 直链里允许保留的媒体扩展名（防 CDN 返回怪后缀）。
 _ALLOWED_EXTS = {".mp4", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".mp3"}
+
+# 主视频、直播和图文图片才代表作品存在；BGM 是侧车文件。
+_LOCAL_MEDIA_EXTS = (_ALLOWED_EXTS - {".mp3"}) | {".flv"}
 
 # channels 段配置缺省值（与 config/default_config.py 保持一致）。
 _SECTION_DEFAULTS: Dict[str, Any] = {
@@ -188,6 +193,15 @@ class ChannelsDownloader:
             for path in base.rglob("*"):
                 if not path.is_file():
                     continue
+                if path.suffix.lower() not in _LOCAL_MEDIA_EXTS:
+                    continue
+                if path.stem.lower().endswith(("_cover", "_bgm")):
+                    continue
+                try:
+                    if path.stat().st_size <= 0:
+                        continue
+                except OSError:
+                    continue
                 match = self._VIDEO_TOKEN_RE.search(path.name)
                 if match:
                     tokens.add(f"channels_{match.group(1)}")
@@ -287,11 +301,24 @@ class ChannelsDownloader:
     # 下载实现
     # ------------------------------------------------------------------
 
+    def build_item_context(self, feed: ChannelFeed) -> Dict[str, Any]:
+        """:meth:`_build_item_context` 的公共入口（MSE 旁路落盘命名复用）。"""
+        return self._build_item_context(feed)
+
+    async def register_downloaded_file(
+        self, feed: ChannelFeed, files: List[Path], aweme_type: str = "channels_video"
+    ) -> None:
+        """登记**外部已落盘**的产物（如 MSE 分片拼装），与普通下载同一本账
+        （历史库 + download_manifest.jsonl）。"""
+        await self._record(feed, files, aweme_type)
+
     async def _ensure_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
                 connector=aiohttp.TCPConnector(limit=8),
                 headers=_HEADERS,
+                # 视频号媒体直连；不继承 HTTP(S)_PROXY 指向的 Clash 等代理。
+                trust_env=False,
             )
         return self._session
 
@@ -303,14 +330,24 @@ class ChannelsDownloader:
     async def _download_video(
         self, feed: ChannelFeed, *, quality: Optional[str] = None
     ) -> List[Path]:
-        url = pick_quality_url(
-            feed, str(quality if quality is not None else self._opt("quality", "highest"))
-        )
+        requested = str(quality if quality is not None else self._opt("quality", "highest"))
+        selected = resolve_quality(feed, requested)
+        url = selected["url"]
         if not url:
             raise ChannelsDownloadError("视频缺少可下载直链")
         context = self._build_item_context(feed)
         save_dir: Path = context["save_dir"]
         target = save_dir / f"{context['file_stem']}{self._ext_from_url(url, '.mp4')}"
+        if target.exists():
+            # A quality upgrade must preserve the user's existing download.
+            dimensions = [selected.get("width", 0), selected.get("height", 0)]
+            suffix = "%dp" % min(dimensions) if min(dimensions) > 0 else "download"
+            candidate = target.with_name(target.stem + "_" + suffix + target.suffix)
+            sequence = 2
+            while candidate.exists():
+                candidate = target.with_name(target.stem + "_" + suffix + "_%d" % sequence + target.suffix)
+                sequence += 1
+            target = candidate
         part = target.with_name(target.name + ".part")
         cipher = Isaac64Cipher(feed.decode_key) if feed.decode_key else None
 
@@ -320,7 +357,8 @@ class ChannelsDownloader:
         retries = max(1, int(self.config.get("retry_times", 3) or 3))
         for attempt in range(retries):
             try:
-                async with session.get(url, timeout=timeout) as resp:
+                # The CDN signs the escaped query, so aiohttp must not canonicalize it.
+                async with session.get(URL(url, encoded=True), timeout=timeout) as resp:
                     if resp.status != 200:
                         raise ChannelsDownloadError(f"CDN 返回 HTTP {resp.status}")
                     save_dir.mkdir(parents=True, exist_ok=True)
@@ -359,7 +397,31 @@ class ChannelsDownloader:
             raise ChannelsDownloadError(
                 "解密校验失败：文件头不是合法 MP4（decodeKey 与文件不匹配）"
             )
+        try:
+            actual = await asyncio.get_running_loop().run_in_executor(None, probe_video_quality, part)
+            expected_width = selected.get("width", 0)
+            expected_height = selected.get("height", 0)
+            if ((expected_width > 0 and actual.get("width", 0) + 8 < expected_width)
+                    or (expected_height > 0 and actual.get("height", 0) + 8 < expected_height)):
+                expected_label = "%s×%s" % (expected_width or "?", expected_height or "?")
+                actual_label = (
+                    "%d×%d" % (actual["width"], actual["height"])
+                    if actual else "无法识别分辨率"
+                )
+                raise ChannelsDownloadError(
+                    "画质校验失败：请求 %s，实际返回 %s；未登记为高清下载"
+                    % (expected_label, actual_label)
+                )
+        except BaseException:
+            part.unlink(missing_ok=True)
+            raise
         part.replace(target)
+        feed.downloaded_quality = {
+            "width": actual.get("width", 0), "height": actual.get("height", 0),
+            "label": actual.get("label", "未确认分辨率"),
+            "requested": requested, "selected": selected["value"],
+        }
+        feed.error = ""
         self._remember_token(feed.token)
         logger.info("已下载 %s（%s）", target.name, feed.title[:40])
 
@@ -381,12 +443,12 @@ class ChannelsDownloader:
             target = save_dir / f"{context['file_stem']}_{idx:02d}{self._ext_from_url(image_url, '.jpg')}"
             if await self._fetch_simple(image_url, target):
                 files.append(target)
+        if not files:
+            raise ChannelsDownloadError("图文动态全部图片下载失败")
         if feed.bgm_url:
             bgm = save_dir / f"{context['file_stem']}_bgm.mp3"
             if await self._fetch_simple(feed.bgm_url, bgm):
                 files.append(bgm)
-        if not files:
-            raise ChannelsDownloadError("图文动态全部图片下载失败")
         self._remember_token(feed.token)
         return files
 
@@ -418,7 +480,6 @@ class ChannelsDownloader:
         target = save_dir / f"{context['file_stem']}_cover{self._ext_from_url(feed.cover_url, '.jpg')}"
         if not await self._fetch_simple(feed.cover_url, target):
             raise ChannelsDownloadError("封面下载失败")
-        feed.downloaded_paths = [str(target)]
         return [target]
 
     async def _download_live(self, feed: ChannelFeed, *, manual: bool = False) -> str:
@@ -488,6 +549,7 @@ class ChannelsDownloader:
                                 "kind": feed.kind,
                                 "duration": feed.duration,
                                 "file_size": feed.file_size,
+                                "downloaded_quality": feed.downloaded_quality,
                                 "specs": feed.specs[:8],
                                 "decode_key": feed.decode_key,
                                 "source_api": feed.source_api,
@@ -512,6 +574,7 @@ class ChannelsDownloader:
             "author_sec_uid": feed.author_id,
             "desc": context["title"],
             "media_type": feed.kind,
+            "downloaded_quality": feed.downloaded_quality,
             "mode": "channels",
             "webpage_url": "",
             "file_names": [p.name for p in files],

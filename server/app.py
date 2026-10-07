@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 import subprocess
 import sys
 from collections import Counter, deque
@@ -25,6 +24,8 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 from fastapi import Body, FastAPI, HTTPException, Query, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 
@@ -39,6 +40,8 @@ from bilibili import (
 )
 from bilibili.factory import UNSUPPORTED_URL_TYPE_DETAIL as BILI_UNSUPPORTED_URL_TYPE_DETAIL
 from bilibili.url_parser import is_bili_short_url, normalize_short_url
+from cli.link_input import extract_url_from_text as extract_url_from_text
+from cli.link_input import extract_urls_from_text
 from config import ConfigLoader
 from control import QueueManager, RateLimiter, RetryHandler
 from core import UNSUPPORTED_URL_TYPE_DETAIL, DouyinAPIClient, DownloaderFactory, URLParser
@@ -47,6 +50,11 @@ from server.auth import (
     AuthPolicy,
     extract_presented_token,
     resolve_auth_token,
+)
+from server.input_validation import (
+    describe_link,
+    validate_channels_quality,
+    validate_config_updates,
 )
 from server.jobs import CURRENT_JOB, DownloadJob, JobManager
 from server.progress import JobProgressReporter
@@ -68,7 +76,7 @@ logger = setup_logger("REST")
 try:  # 版本号在项目根的 __init__.py 里，缺失时退默认值
     from __init__ import __version__ as _VERSION
 except ImportError:  # pragma: no cover - 打包/独立运行场景
-    _VERSION = "2.0.3"
+    _VERSION = "2.0.4"
 
 # 网页控制台根目录（项目根 /web）
 _WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
@@ -108,6 +116,7 @@ _EDITABLE_CONFIG_KEYS = (
     "server",
     "browser_fallback",
     "auto_cookie",
+    "channels",
 )
 
 # 单次提交允许覆盖的配置键（不落盘，只作用于该 job）。
@@ -145,62 +154,13 @@ _OVERRIDE_KEYS = frozenset(
 # ytdlp.options_policy，即便本机也默认只放行安全参数）。
 _HTTP_FORBIDDEN_YTDLP_KEYS = ("extra_options", "unsafe_extra_options")
 
-# 抖音 App「复制链接」拿到的其实是整条分享文案，例如：
-#   长按复制此条消息，打开抖音搜索，查看TA的更多作品。 https://v.douyin.com/xxxx/
-# 直接把这一整行当 URL 解析必然失败（落成 Unsupported URL）。下面几个正则
-# 从任意文本里抠出真正的链接：先找带 scheme 的，再找裸域名（App 里也常出现
-# 不带 https:// 的 v.douyin.com/xxx），最后是 B 站裸 BV 号。
-_URL_IN_TEXT_RE = re.compile(r"https?://[^\s<>\"'）)】\]】，。、；！？]+", re.IGNORECASE)
-_BARE_DOUYIN_RE = re.compile(
-    r"(?<![0-9A-Za-z._-])"
-    r"((?:v\.|www\.|live\.)?(?:douyin|iesdouyin)\.com/[^\s<>\"'）)】\]】，。、；！？]*"
-    r"|webcast\.amemv\.com/[^\s<>\"'）)】\]】，。、；！？]*)",
-    re.IGNORECASE,
-)
-_BARE_BILI_RE = re.compile(
-    r"(?<![0-9A-Za-z._-])"
-    r"((?:www\.|space\.|m\.)?bilibili\.com/[^\s<>\"'）)】\]】，。、；！？]*"
-    r"|b23\.tv/[^\s<>\"'）)】\]】，。、；！？]*)",
-    re.IGNORECASE,
-)
-_BARE_BVID_RE = re.compile(r"(?<![0-9A-Za-z])(BV[0-9A-Za-z]{10})(?![0-9A-Za-z])")
-# 快手 / 小红书等平台的分享文案同样常带不含 scheme 的裸短链。
-_BARE_YTDLP_RE = re.compile(
-    r"(?<![0-9A-Za-z._-])"
-    r"((?:[a-z0-9-]+\.)*(?:iqiyi\.com|iq\.com|v\.qq\.com|video\.qq\.com|youku\.com|mgtv\.com"
-    r"|kuaishou\.com|gifshow\.com|chenzhongtech\.com|ixigua\.com|toutiao\.com"
-    r"|weibo\.com|weibo\.cn|xiaohongshu\.com|xhslink\.com)/[^\s<>\"'）)】\]】，。、；！？]*)",
-    re.IGNORECASE,
-)
-_URL_TRAILING_JUNK = ".,;:!?)]}>）】、，。；：！？"
-
-
-def extract_url_from_text(raw: str) -> str:
-    """从分享文案里提取真正的链接；提取不到时原样返回，让下游给出可读错误。"""
-    text = (raw or "").strip()
-    if not text:
-        return ""
-    match = _URL_IN_TEXT_RE.search(text)
-    if match:
-        return match.group(0).rstrip(_URL_TRAILING_JUNK)
-    match = _BARE_DOUYIN_RE.search(text)
-    if match:
-        return "https://" + match.group(1).rstrip(_URL_TRAILING_JUNK)
-    match = _BARE_BILI_RE.search(text)
-    if match:
-        return "https://" + match.group(1).rstrip(_URL_TRAILING_JUNK)
-    match = _BARE_YTDLP_RE.search(text)
-    if match:
-        return "https://" + match.group(1).rstrip(_URL_TRAILING_JUNK)
-    match = _BARE_BVID_RE.search(text)
-    if match:
-        return match.group(1)
-    return text
-
-
 class DownloadRequest(BaseModel):
     url: str
     overrides: Optional[Dict[str, Any]] = None
+
+
+class LinksParseRequest(BaseModel):
+    text: str
 
 
 class JobResponse(BaseModel):
@@ -246,6 +206,79 @@ def _resolve_inside_root(root: Path, candidate: Optional[str]) -> Path:
     if target != root_resolved and root_resolved not in target.parents:
         raise HTTPException(status_code=403, detail="只能打开下载目录内的路径")
     return target
+
+
+_FS_LIST_LIMIT = 500
+
+
+def _list_windows_drives() -> List[str]:
+    """枚举本机存在的盘符（仅 Windows 使用）。"""
+    import string
+
+    drives: List[str] = []
+    for letter in string.ascii_uppercase:
+        drive = f"{letter}:\\"
+        try:
+            if Path(drive).exists():
+                drives.append(drive)
+        except OSError:  # 个别盘符（如断开的映射盘）探测可能抛错，跳过即可
+            continue
+    return drives
+
+
+def _list_subdirectories(raw: str) -> Dict[str, Any]:
+    """列出某个目录下的子目录（仅目录名，不含文件），供网页端目录选择器使用。
+
+    安全性说明：本接口只读、只返回子目录名（不含文件与文件内容），
+    且被 /api/* 统一认证边界覆盖（非环回客户端必须持有 token）。
+    """
+    path = (raw or "").strip()
+    if not path:
+        if sys.platform.startswith("win"):
+            # 空路径 =「此电脑」层级，返回盘符列表
+            return {"path": "", "parent": None, "dirs": _list_windows_drives(), "error": None}
+        path = "/"
+
+    target = Path(path).expanduser()
+    if not target.is_absolute():
+        raise HTTPException(status_code=400, detail="请提供绝对路径（例如 D:\\Downloaded）")
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="路径不存在")
+    if not target.is_dir():
+        raise HTTPException(status_code=400, detail="该路径不是目录")
+
+    resolved = target.resolve()
+    parent = resolved.parent
+    # 盘符根目录（如 D:\）的 Path.parent 是它自己：此时 parent 返回空字符串，
+    # 前端据此回到「此电脑」层级（还能换盘符），而不是被困在盘符里。
+    at_root = parent == resolved
+    if at_root:
+        parent_value: Optional[str] = "" if sys.platform.startswith("win") else None
+    else:
+        parent_value = str(parent)
+    dirs: List[str] = []
+    error: Optional[str] = None
+    try:
+        for entry in sorted(resolved.iterdir(), key=lambda p: p.name.lower()):
+            if len(dirs) >= _FS_LIST_LIMIT:
+                error = f"子目录过多，仅显示前 {_FS_LIST_LIMIT} 个"
+                break
+            try:
+                if entry.is_dir():
+                    dirs.append(entry.name)
+            except OSError:  # Windows 上的失效 junction 等特殊条目，跳过
+                continue
+    except PermissionError:
+        error = "没有权限读取该目录"
+    except OSError as exc:
+        error = f"读取目录失败：{exc}"
+
+    return {
+        "path": str(resolved),
+        "parent": parent_value,
+        "dirs": dirs,
+        "error": error,
+    }
 
 
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
@@ -335,6 +368,14 @@ def _write_config_file(path: str, config: Dict[str, Any], keys: tuple) -> bool:
         if key not in config:
             continue
         value = config[key]
+        if key == "channels" and isinstance(value, dict):
+            # Only this section's quality is editable through the web form.
+            section = existing.get(key)
+            section = dict(section) if isinstance(section, dict) else {}
+            if "quality" in value:
+                section["quality"] = value["quality"]
+            existing[key] = section
+            continue
         if isinstance(value, dict):
             value = deepcopy(value)
         elif isinstance(value, list):
@@ -354,12 +395,10 @@ def _write_config_file(path: str, config: Dict[str, Any], keys: tuple) -> bool:
 
 def _fork_config(base: ConfigLoader, overrides: Optional[Dict[str, Any]]) -> ConfigLoader:
     """Build a per-job config view without mutating the shared instance."""
-    if not overrides:
-        return base
     forked = ConfigLoader(None)
     forked.config = deepcopy(base.config)
     forked.config_path = base.config_path
-    safe = {k: v for k, v in overrides.items() if k in _OVERRIDE_KEYS}
+    safe = {k: v for k, v in (overrides or {}).items() if k in _OVERRIDE_KEYS}
     ytdlp_section = safe.get("ytdlp")
     if isinstance(ytdlp_section, dict) and _HTTP_FORBIDDEN_YTDLP_KEYS:
         # Web API 用户不得借 overrides 间接构造任意 yt-dlp 参数（含 outtmpl /
@@ -408,7 +447,7 @@ class _ServerDeps:
             self.cookie_manager.get_cookies()
         self.file_manager = FileManager(config.get("path"))
         self.rate_limiter = RateLimiter(max_per_second=float(config.get("rate_limit", 2) or 2))
-        self.retry_handler = RetryHandler(max_retries=int(config.get("retry_times", 3) or 3))
+        self.retry_handler = RetryHandler(max_retries=int(config.get("retry_times", 3)))
         self.queue_manager = QueueManager(max_workers=int(config.get("thread", 5) or 5))
 
         # 可视化控制台的档案/统计页要读 SQLite。数据库默认开启，但若用户显式关掉
@@ -440,7 +479,7 @@ class _ServerDeps:
             )
         if "retry_times" in updates:
             self.retry_handler = RetryHandler(
-                max_retries=int(self.config.get("retry_times", 3) or 3)
+                max_retries=int(self.config.get("retry_times", 3))
             )
         if "thread" in updates:
             workers = int(self.config.get("thread", 5) or 5)
@@ -871,6 +910,15 @@ def build_app(config: ConfigLoader) -> FastAPI:
     app.state.job_manager = manager
     app.state.deps = deps
 
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(_request: Request, exc: RequestValidationError) -> JSONResponse:
+        errors = exc.errors()
+        fields = [".".join(str(part) for part in error.get("loc", ())[1:]) for error in errors]
+        message = "请求参数格式不正确：" + "、".join(field or "请求内容" for field in fields)
+        return JSONResponse(
+            status_code=422, content={"detail": jsonable_encoder(errors), "message": message}
+        )
+
     # ------------------------------------------------------------------
     # 远程访问边界（server/auth.py）
     # ------------------------------------------------------------------
@@ -920,13 +968,33 @@ def build_app(config: ConfigLoader) -> FastAPI:
         # 唯一公开的 API 端点：只含非敏感的策略摘要（是否要求 token）。
         return {"status": "ok", "version": _VERSION, **auth_policy.describe()}
 
+    @app.post("/api/v1/links/parse")
+    async def parse_links(req: LinksParseRequest) -> Dict[str, Any]:
+        """离线提取分享文案中的所有链接；去重但保留首次出现的顺序。"""
+        extracted = extract_urls_from_text(req.text, deduplicate=False)
+        urls = list(dict.fromkeys(extracted))
+        return {
+            "urls": urls, "count": len(urls), "duplicate_count": len(extracted) - len(urls),
+            "items": [describe_link(url) for url in urls],
+        }
+
     @app.post("/api/v1/download", response_model=JobResponse)
     async def create_job(req: DownloadRequest) -> JobResponse:
-        if not req.url:
-            raise HTTPException(status_code=400, detail="url is required")
-        # 允许直接粘贴 App 分享文案：先把真正的链接抠出来再进下载流程。
-        clean_url = extract_url_from_text(req.url)
-        job = await manager.submit(clean_url, overrides=req.overrides)
+        urls = extract_urls_from_text(req.url)
+        if len(urls) > 1:
+            raise HTTPException(status_code=400, detail="检测到多个链接，请逐条提交下载任务")
+        clean_url = urls[0] if urls else req.url.strip()
+        if not clean_url:
+            raise HTTPException(status_code=400, detail="请先粘贴视频链接或分享文案")
+        description = describe_link(clean_url)
+        if not description["supported"]:
+            raise HTTPException(status_code=400, detail=description["message"])
+        overrides = {k: v for k, v in (req.overrides or {}).items() if k in _OVERRIDE_KEYS}
+        try:
+            validate_config_updates(overrides)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        job = await manager.submit(clean_url, overrides=overrides or None)
         return JobResponse(job_id=job.job_id, status=job.status, url=clean_url)
 
     @app.get("/api/v1/jobs/{job_id}")
@@ -946,6 +1014,8 @@ def build_app(config: ConfigLoader) -> FastAPI:
         job = await manager.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="job not found")
+        if job.status not in {"failed", "cancelled"}:
+            raise HTTPException(status_code=409, detail="只有失败或已取消的任务可以重试")
         new_job = await manager.submit(job.url, overrides=job.overrides)
         return JobResponse(job_id=new_job.job_id, status=new_job.status, url=new_job.url)
 
@@ -1003,6 +1073,12 @@ def build_app(config: ConfigLoader) -> FastAPI:
     @app.put("/api/v1/config")
     async def update_config(req: ConfigUpdateRequest) -> Dict[str, Any]:
         updates = {k: v for k, v in (req.updates or {}).items() if k in _EDITABLE_CONFIG_KEYS}
+        # The web quality setting must not alter certificate/proxy controls.
+        channels_section = updates.get("channels")
+        if isinstance(channels_section, dict):
+            updates["channels"] = {k: v for k, v in channels_section.items() if k == "quality"}
+            if not updates["channels"]:
+                updates.pop("channels")
         # auth_token 是 REST 认证凭据：不得经 HTTP 写入，否则远程匿名请求
         # 可以先自设 token 再通过认证（自签发后门）。
         server_section = updates.get("server")
@@ -1015,6 +1091,10 @@ def build_app(config: ConfigLoader) -> FastAPI:
                 status_code=400,
                 detail="no editable keys provided (credentials are never writable via HTTP)",
             )
+        try:
+            validate_config_updates(updates)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         deps.config.update(**updates)
         deps.reload_runtime(updates)
         if "thread" in updates:
@@ -1032,6 +1112,11 @@ def build_app(config: ConfigLoader) -> FastAPI:
     @app.get("/api/v1/cookies/status")
     async def cookies_status() -> Dict[str, Any]:
         return deps.cookie_status()
+
+    @app.get("/api/v1/fs/dirs")
+    async def list_dirs(path: str = Query("", description="要列出的目录绝对路径；留空返回根层级")) -> Dict[str, Any]:
+        # 网页端「浏览…」选择下载目录用：只读列子目录，见 _list_subdirectories。
+        return _list_subdirectories(path)
 
     # ------------------------------------------------------------------
     # 总览 / 统计
@@ -1068,13 +1153,15 @@ def build_app(config: ConfigLoader) -> FastAPI:
                 "running": by_status.get("running", 0),
                 "success": by_status.get("success", 0),
                 "failed": by_status.get("failed", 0),
+                "cancelled": by_status.get("cancelled", 0),
+                "paused": sum(j.paused for j in jobs),
             },
             "archive": archive,
             "top_authors": top_authors,
             "runtime": {
                 "thread": int(deps.config.get("thread", 5) or 5),
                 "rate_limit": float(deps.config.get("rate_limit", 2) or 2),
-                "retry_times": int(deps.config.get("retry_times", 3) or 3),
+                "retry_times": int(deps.config.get("retry_times", 3)),
                 "video_quality": deps.config.get("video_quality", "highest"),
                 "mode": deps.config.get("mode") or [],
                 "proxy": bool(deps.config.get("proxy")),
@@ -1258,12 +1345,17 @@ def build_app(config: ConfigLoader) -> FastAPI:
         return channels_sessions.feeds(limit=limit)
 
     @app.post("/api/v1/channels/feeds/{feed_id}/download")
-    async def channels_feed_download(feed_id: str) -> Dict[str, Any]:
+    async def channels_feed_download(
+        feed_id: str, body: Dict[str, Any] = Body(default={})
+    ) -> Dict[str, Any]:
         try:
-            return await channels_sessions.download_feed(feed_id)
+            quality = validate_channels_quality(body["quality"]) if "quality" in body else None
+            return await channels_sessions.download_feed(feed_id, quality=quality)
         except KeyError:
             raise HTTPException(status_code=404, detail="feed not found") from None
         except ChannelsSessionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/v1/channels/auto-download")

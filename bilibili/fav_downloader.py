@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List
 
 from core.downloader_base import DownloadResult
@@ -78,7 +79,7 @@ class BiliFavDownloader(BiliBaseDownloader):
         seen: set = set()
         info: Dict[str, Any] = {}
         skipped_kinds = 0
-        empty_streak = 0
+        seen_pages: set = set()
         page = 1
         while page <= MAX_PAGES:
             await self.rate_limiter.acquire()
@@ -98,6 +99,14 @@ class BiliFavDownloader(BiliBaseDownloader):
                 info = data["info"]
             if not batch:
                 break
+
+            # 无效稿件也有自己的页内容；连续多页没有可用视频并不表示翻页
+            # 卡住。只有原始页重复才停止，避免失效/音频多时漏掉后页视频。
+            signature = json.dumps(batch, sort_keys=True, default=str)
+            if signature in seen_pages:
+                logger.debug("Favlist %s pagination stalled at page %d", media_id, page)
+                break
+            seen_pages.add(signature)
 
             fresh = []
             for item in batch:
@@ -119,12 +128,6 @@ class BiliFavDownloader(BiliBaseDownloader):
             if limit > 0 and not has_time_filter and len(collected) >= limit:
                 break
 
-            # 本页可能整页都是失效 / 音频 / 合集条目，此时 fresh 为空但 has_more
-            # 仍为真——继续翻页，但连续多页都没有可用条目说明接口在空转，收手。
-            empty_streak = empty_streak + 1 if not fresh else 0
-            if empty_streak >= 3:
-                logger.debug("Favlist %s produced no usable entry for 3 pages, stop", media_id)
-                break
             if not data.get("has_more"):
                 break
             page += 1

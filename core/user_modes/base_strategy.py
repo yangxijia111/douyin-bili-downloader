@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABC
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 
+from core.api_client import LoginRequiredError
 from core.downloader_base import DownloadResult
 from utils.logger import setup_logger
 
@@ -94,35 +95,42 @@ class BaseUserModeStrategy(ABC):
             return []
 
         aweme_list: List[Dict[str, Any]] = []
+        seen_aweme_ids: Set[str] = set()
+        seen_cursors: Set[int] = set()
         max_cursor = 0
         has_more = True
 
         number_limit = int(self.downloader.config.get("number", {}).get(self.mode_name, 0) or 0)
-        media_filter_enabled = self._media_type_filter_enabled()
         while has_more:
             await self.downloader.rate_limiter.acquire()
             request_cursor = max_cursor
+            seen_cursors.add(request_cursor)
             page_data = await fetcher(sec_uid, request_cursor, 20)
             page = self._normalize_page_data(page_data)
             page_items = self.select_items(page)
             if not page_items:
                 break
 
-            aweme_list.extend(page_items)
+            for item in page_items:
+                aweme_id = str(item.get("aweme_id") or "")
+                if aweme_id and aweme_id in seen_aweme_ids:
+                    continue
+                if aweme_id:
+                    seen_aweme_ids.add(aweme_id)
+                aweme_list.append(item)
 
             if number_limit > 0:
-                if media_filter_enabled:
-                    if len(self._filter_by_media_type(aweme_list)) >= number_limit:
-                        break
-                elif len(aweme_list) >= number_limit:
-                    aweme_list = aweme_list[:number_limit]
+                candidates = self._filter_pinned_items(aweme_list)
+                candidates = self.downloader._filter_by_time(candidates)
+                candidates = self._filter_by_media_type(candidates)
+                if len(candidates) >= number_limit:
                     break
 
             has_more = bool(page.get("has_more", False))
             max_cursor = int(page.get("max_cursor", 0) or 0)
-            if has_more and max_cursor == request_cursor:
+            if has_more and max_cursor in seen_cursors:
                 logger.warning(
-                    "Mode %s cursor did not advance (%s), stop paging",
+                    "Mode %s cursor repeated (%s), stop paging",
                     self.mode_name,
                     max_cursor,
                 )
@@ -143,12 +151,14 @@ class BaseUserModeStrategy(ABC):
         count: int = 20,
     ) -> List[Dict[str, Any]]:
         entries: List[Dict[str, Any]] = []
+        seen_cursors: Set[int] = set()
         max_cursor = 0
         has_more = True
 
         while has_more:
             await self.downloader.rate_limiter.acquire()
             request_cursor = max_cursor
+            seen_cursors.add(request_cursor)
             page_data = await fetcher(*fetch_args, request_cursor, count)
             page = self._normalize_page_data(page_data)
             page_items = self.select_items(page)
@@ -158,15 +168,51 @@ class BaseUserModeStrategy(ABC):
             entries.extend(page_items)
             has_more = bool(page.get("has_more", False))
             max_cursor = int(page.get("max_cursor", 0) or 0)
-            if has_more and max_cursor == request_cursor:
+            if has_more and max_cursor in seen_cursors:
                 logger.warning(
-                    "Mode %s cursor did not advance (%s), stop paging",
+                    "Mode %s cursor repeated (%s), stop paging",
                     self.mode_name,
                     max_cursor,
                 )
                 break
 
         return entries
+
+    async def _collect_metadata_aweme(
+        self,
+        sec_uid: str,
+        *,
+        id_field: str,
+        id_aliases: List[str],
+        fetch_method_name: str,
+    ) -> List[Dict[str, Any]]:
+        """Container counts are unrelated to the number of eligible works."""
+        listing = getattr(self.downloader.api_client, self.api_method_name, None)
+        if not callable(listing):
+            return []
+        raw_items = await self._collect_paged_entries(listing, sec_uid)
+        direct_items: List[Dict[str, Any]] = []
+        metadata_items: List[Dict[str, Any]] = []
+        for item in raw_items:
+            aweme = self._extract_aweme_from_item(item)
+            if aweme is not None:
+                direct_items.append(aweme)
+            else:
+                metadata_items.append(item)
+        expanded = await self._expand_metadata_items(
+            metadata_items,
+            id_field=id_field,
+            id_aliases=id_aliases,
+            fetch_method_name=fetch_method_name,
+        )
+        merged: List[Dict[str, Any]] = []
+        seen: Set[str] = set()
+        for item in direct_items + expanded:
+            aweme_id = str(item.get("aweme_id") or "")
+            if aweme_id and aweme_id not in seen:
+                seen.add(aweme_id)
+                merged.append(item)
+        return merged
 
     async def _expand_metadata_items(
         self,
@@ -202,10 +248,15 @@ class BaseUserModeStrategy(ABC):
 
             cursor = 0
             has_more = True
+            seen_cursors: Set[int] = set()
             while has_more:
+                seen_cursors.add(cursor)
                 await self.downloader.rate_limiter.acquire()
                 try:
                     page_data = await fetcher(str(entry_id), cursor=cursor, count=20)
+                except LoginRequiredError:
+                    # Entry points refresh authentication on this typed error.
+                    raise
                 except Exception as exc:
                     logger.warning(
                         "Expansion fetch failed for %s=%s: %s",
@@ -231,9 +282,9 @@ class BaseUserModeStrategy(ABC):
 
                 has_more = bool(page.get("has_more", False))
                 next_cursor = int(page.get("max_cursor", 0) or 0)
-                if has_more and next_cursor == cursor:
+                if has_more and next_cursor in seen_cursors:
                     logger.warning(
-                        "%s %s cursor did not advance",
+                        "%s %s cursor repeated",
                         id_field,
                         entry_id,
                     )

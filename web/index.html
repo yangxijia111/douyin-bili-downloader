@@ -3,185 +3,483 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>抖音下载器 · 可视化控制台</title>
+<meta name="color-scheme" content="light dark">
+<title>视频下载器 · 多平台下载工作台</title>
+<script>try { document.documentElement.dataset.theme = localStorage.getItem("dy_console_theme") || "light"; } catch (_) { document.documentElement.dataset.theme = "light"; }</script>
 <style>
+/* ============================================================
+   设计系统
+   深色基调 + 品牌蓝紫渐变；单文件离线，无任何外部依赖。
+   ============================================================ */
 :root{
-  --bg:#0e1116; --bg2:#151a22; --bg3:#1b212b; --bg4:#222a36;
-  --border:#28303d; --border2:#38424f;
-  --text:#e6eaf2; --muted:#8b95a7; --dim:#5f6a7d;
-  --accent:#4c8dff; --accent2:#2f6fe0;
-  --ok:#3fb950; --warn:#d29922; --err:#f85149; --info:#58a6ff;
-  --radius:10px; --radius-lg:14px;
+  --bg:#0a0d13;
+  --panel:rgba(15,19,28,.88);
+  --card:#131824;
+  --card-deep:#0f131d;
+  --inset:#1a2130;
+  --inset-2:#202939;
+  --line:#232c40;
+  --line-soft:#1b2334;
+  --text:#e9edf5;
+  --muted:#98a3b8;
+  --dim:#5f6b82;
+  --brand:#5b8cff;
+  --brand-2:#9d5cff;
+  --grad:linear-gradient(135deg,#5b8cff,#9d5cff);
+  --ok:#34d399; --warn:#f5b84a; --err:#ff6b6b; --info:#5b8cff;
+  --ok-bg:rgba(52,211,153,.12); --warn-bg:rgba(245,184,74,.12); --err-bg:rgba(255,107,107,.12); --info-bg:rgba(91,140,255,.12);
+  --radius:12px; --radius-lg:16px;
   --mono:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;
+  --shadow-card:0 1px 2px rgba(0,0,0,.25),0 8px 24px -12px rgba(0,0,0,.5);
+  --shadow-pop:0 12px 40px -8px rgba(0,0,0,.6);
 }
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;height:100%}
 body{
-  background:var(--bg); color:var(--text); font-size:14px; line-height:1.55;
+  background:var(--bg); color:var(--text); font-size:14px; line-height:1.6;
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  background-image:
+    radial-gradient(900px 480px at -5% -10%, rgba(91,140,255,.10), transparent 60%),
+    radial-gradient(800px 500px at 105% 108%, rgba(157,92,255,.08), transparent 60%);
+  background-attachment:fixed;
 }
 button,input,select,textarea{font-family:inherit;font-size:13px;color:var(--text)}
 a{color:var(--info);text-decoration:none}
 a:hover{text-decoration:underline}
+::selection{background:rgba(91,140,255,.35)}
+/* 滚动条 */
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#252e42;border-radius:8px;border:2px solid var(--bg)}
+::-webkit-scrollbar-thumb:hover{background:#313d58}
 
+/* ============================ 布局骨架 ============================ */
 .layout{display:flex;min-height:100vh}
 .sidebar{
-  width:212px;flex:0 0 212px;background:var(--bg2);border-right:1px solid var(--border);
+  width:224px;flex:0 0 224px;background:var(--panel);backdrop-filter:blur(14px);
+  border-right:1px solid var(--line-soft);
   display:flex;flex-direction:column;position:sticky;top:0;height:100vh
 }
-.brand{padding:18px 18px 14px;border-bottom:1px solid var(--border)}
-.brand h1{margin:0;font-size:15px;font-weight:600;letter-spacing:.2px}
-.brand p{margin:4px 0 0;font-size:11px;color:var(--dim)}
-.nav{padding:10px 8px;flex:1;overflow:auto}
-.nav button{
-  display:flex;align-items:center;gap:9px;width:100%;padding:9px 11px;margin-bottom:2px;
-  background:transparent;border:0;border-radius:8px;cursor:pointer;text-align:left;
-  color:var(--muted);font-size:13px;transition:background .12s,color .12s
+.brand{display:flex;align-items:center;gap:11px;padding:18px 16px 16px;border-bottom:1px solid var(--line-soft)}
+.brand .logo{
+  width:38px;height:38px;flex:none;border-radius:11px;background:var(--grad);
+  display:flex;align-items:center;justify-content:center;color:#fff;
+  box-shadow:0 4px 14px -4px rgba(110,100,255,.55)
 }
-.nav button:hover{background:var(--bg3);color:var(--text)}
-.nav button.active{background:var(--accent);color:#fff;font-weight:500}
-.nav .glyph{width:15px;height:15px;flex:0 0 15px;display:inline-block}
-.side-foot{padding:10px 14px;border-top:1px solid var(--border);font-size:11px;color:var(--dim)}
-.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--dim);margin-right:6px;vertical-align:middle}
-.dot.on{background:var(--ok)}.dot.off{background:var(--err)}
+.brand .logo svg{width:20px;height:20px}
+.brand h1{margin:0;font-size:14.5px;font-weight:650;letter-spacing:.2px;line-height:1.3}
+.brand p{margin:3px 0 0;font-size:11px;color:var(--dim);line-height:1.4}
+.nav{padding:12px 10px;flex:1;overflow:auto}
+.nav-group-title{
+  font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:1.2px;
+  font-weight:600;padding:14px 11px 7px
+}
+.nav-group-title:first-child{padding-top:4px}
+.nav button{
+  display:flex;align-items:center;gap:10px;width:100%;padding:8.5px 11px;margin-bottom:2px;
+  background:transparent;border:0;border-radius:10px;cursor:pointer;text-align:left;
+  color:var(--muted);font-size:13.5px;transition:background .15s,color .15s;position:relative
+}
+.nav button:hover{background:rgba(255,255,255,.045);color:var(--text)}
+.nav button.active{background:var(--grad);color:#fff;font-weight:550;box-shadow:0 4px 14px -6px rgba(110,100,255,.6)}
+.nav button.active:hover{background:var(--grad)}
+.nav .glyph{width:17px;height:17px;flex:0 0 17px;display:inline-block;opacity:.9}
+.nav .nav-badge{
+  margin-left:auto;font-size:10.5px;background:rgba(255,255,255,.12);border-radius:99px;
+  padding:1px 7px;font-weight:500
+}
+.side-foot{padding:12px 14px;border-top:1px solid var(--line-soft);font-size:11.5px;color:var(--dim)}
+.side-foot .conn-line{display:flex;align-items:center;gap:7px;cursor:pointer;border-radius:8px;padding:4px 6px;margin:0 -6px;transition:background .15s}
+.side-foot .conn-line:hover{background:rgba(255,255,255,.045)}
+.side-foot .ver{margin-top:7px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--dim);flex:none;position:relative}
+.dot.on{background:var(--ok);box-shadow:0 0 0 3px rgba(52,211,153,.18)}
+.dot.off{background:var(--err);box-shadow:0 0 0 3px rgba(255,107,107,.18)}
 
 .main{flex:1;min-width:0;display:flex;flex-direction:column}
 .topbar{
-  display:flex;align-items:center;gap:12px;padding:12px 22px;border-bottom:1px solid var(--border);
-  background:var(--bg2);position:sticky;top:0;z-index:20;flex-wrap:wrap
+  display:flex;align-items:center;gap:12px;padding:13px 26px;border-bottom:1px solid var(--line-soft);
+  background:var(--panel);backdrop-filter:blur(14px);position:sticky;top:0;z-index:20;flex-wrap:wrap
 }
-.topbar h2{margin:0;font-size:15px;font-weight:600}
+.topbar h2{margin:0;font-size:15.5px;font-weight:650}
 .topbar .sub{color:var(--dim);font-size:12px}
 .topbar .spacer{flex:1}
-.content{padding:22px;max-width:1280px;width:100%}
+.content{padding:24px 26px 60px;max-width:1280px;width:100%;margin:0 auto}
 
-.card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-lg);padding:18px;margin-bottom:16px}
-.card>h3{margin:0 0 4px;font-size:14px;font-weight:600}
-.card>p.hint{margin:0 0 14px;font-size:12px;color:var(--muted)}
+/* ============================ 卡片与网格 ============================ */
+.card{
+  background:var(--card);border:1px solid var(--line);border-radius:var(--radius-lg);
+  padding:20px;margin-bottom:16px;box-shadow:var(--shadow-card);transition:border-color .2s
+}
+.card:hover{border-color:#2b3650}
+.card>h3{margin:0 0 4px;font-size:14.5px;font-weight:650;display:flex;align-items:center;gap:8px}
+.card>h3 .ico{width:16px;height:16px;color:var(--brand);flex:none;display:inline-block}
+.card>p.hint{margin:0 0 14px;font-size:12.5px;color:var(--muted);line-height:1.65}
 .grid{display:grid;gap:14px}
 .g2{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
 .g3{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
-.g4{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
+.g4{grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
 
-.stat{background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px}
-.stat .k{font-size:12px;color:var(--muted);margin-bottom:6px}
-.stat .v{font-size:22px;font-weight:600;line-height:1.2}
+/* 快速开始横幅（总览页顶部） */
+.hero{
+  background:
+    radial-gradient(500px 200px at 12% -30%, rgba(91,140,255,.22), transparent 65%),
+    radial-gradient(500px 220px at 88% 140%, rgba(157,92,255,.18), transparent 65%),
+    var(--card);
+  border:1px solid #2b3650;border-radius:var(--radius-lg);padding:22px 24px;margin-bottom:16px
+}
+.hero .hero-title{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.hero h3{margin:0;font-size:16.5px;font-weight:700}
+.hero p{margin:6px 0 0;font-size:12.5px;color:var(--muted)}
+.hero-steps{display:flex;gap:12px;margin-top:16px;flex-wrap:wrap}
+.hero-step{
+  flex:1;min-width:170px;display:flex;gap:10px;align-items:flex-start;
+  background:rgba(255,255,255,.035);border:1px solid var(--line-soft);border-radius:12px;padding:12px 14px
+}
+.hero-step .n{
+  width:22px;height:22px;flex:none;border-radius:50%;background:var(--grad);color:#fff;
+  font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-top:1px
+}
+.hero-step b{display:block;font-size:13px;font-weight:600}
+.hero-step span{font-size:11.5px;color:var(--muted);line-height:1.5;display:block;margin-top:2px}
+.hero .hero-act{margin-top:16px;display:flex;gap:10px;flex-wrap:wrap}
+
+/* 统计卡 */
+.stat{
+  background:var(--card);border:1px solid var(--line);border-radius:var(--radius-lg);
+  padding:16px 18px;box-shadow:var(--shadow-card);display:flex;gap:13px;align-items:center;
+  transition:transform .18s,border-color .18s
+}
+.stat:hover{transform:translateY(-2px);border-color:#2b3650}
+.stat .stat-ico{
+  width:40px;height:40px;flex:none;border-radius:12px;display:flex;align-items:center;justify-content:center
+}
+.stat .stat-ico svg{width:19px;height:19px}
+.stat .stat-ico.blue{background:var(--info-bg);color:var(--brand)}
+.stat .stat-ico.green{background:var(--ok-bg);color:var(--ok)}
+.stat .stat-ico.gold{background:var(--warn-bg);color:var(--warn)}
+.stat .stat-ico.purple{background:rgba(157,92,255,.13);color:#b98cff}
+.stat .k{font-size:12px;color:var(--muted);margin-bottom:3px}
+.stat .v{font-size:21px;font-weight:650;line-height:1.2;font-variant-numeric:tabular-nums}
 .stat .v.sm{font-size:14px;font-weight:500;word-break:break-all;font-family:var(--mono)}
 .stat.ok .v{color:var(--ok)}.stat.err .v{color:var(--err)}.stat.warn .v{color:var(--warn)}
 
+/* ============================ 表单控件 ============================ */
 label.field{display:block;margin-bottom:12px}
-label.field>span{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}
+label.field>span{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
 input[type=text],input[type=number],input[type=date],select,textarea{
-  width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;
-  padding:8px 10px;outline:none
+  width:100%;background:var(--inset);border:1px solid var(--line);border-radius:10px;
+  padding:9px 12px;outline:none;transition:border-color .15s,box-shadow .15s
 }
-input:focus,select:focus,textarea:focus{border-color:var(--accent)}
-textarea{resize:vertical;font-family:var(--mono);line-height:1.6}
+input:focus,select:focus,textarea:focus{border-color:var(--brand);box-shadow:0 0 0 3px rgba(91,140,255,.18)}
+input::placeholder,textarea::placeholder{color:var(--dim)}
+textarea{resize:vertical;font-family:var(--mono);line-height:1.7;font-size:12.5px}
 input[type=number]{font-family:var(--mono)}
-.sw{display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;padding:4px 0}
-.sw input{appearance:none;width:34px;height:19px;border-radius:19px;background:var(--bg4);
-  border:1px solid var(--border2);position:relative;cursor:pointer;transition:background .15s;flex:0 0 34px}
-.sw input::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;
-  background:var(--muted);transition:transform .15s,background .15s}
-.sw input:checked{background:var(--accent2);border-color:var(--accent)}
-.sw input:checked::after{transform:translateX(15px);background:#fff}
+select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%2398a3b8' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:30px}
+
+/* 开关 */
+.sw{display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none;padding:4px 0}
+.sw input{appearance:none;width:38px;height:21px;border-radius:21px;background:var(--inset-2);
+  border:1px solid var(--line);position:relative;cursor:pointer;transition:background .18s,border-color .18s;flex:0 0 38px;margin:0}
+.sw input::after{content:"";position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;
+  background:#8b95a7;transition:transform .18s,background .18s}
+.sw input:checked{background:var(--grad);border-color:transparent}
+.sw input:checked::after{transform:translateX(17px);background:#fff}
 .sw span{font-size:13px}
+.sw:hover input{border-color:#33405c}
 
+/* 药丸选择 */
 .chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
-.chip{background:var(--bg3);border:1px solid var(--border);border-radius:999px;padding:6px 13px;
-  cursor:pointer;font-size:12px;color:var(--muted);transition:all .12s}
-.chip:hover{border-color:var(--border2);color:var(--text)}
-.chip.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:500}
+.chip{background:var(--inset);border:1px solid var(--line);border-radius:999px;padding:6px 14px;
+  cursor:pointer;font-size:12.5px;color:var(--muted);transition:all .15s;user-select:none}
+.chip:hover{border-color:#3a4763;color:var(--text)}
+.chip.on{background:var(--grad);border-color:transparent;color:#fff;font-weight:550;box-shadow:0 3px 10px -3px rgba(110,100,255,.55)}
 
-button.btn{background:var(--accent);border:1px solid var(--accent);color:#fff;border-radius:8px;
-  padding:8px 16px;cursor:pointer;font-weight:500}
-button.btn:hover{background:var(--accent2)}
-button.btn:disabled{opacity:.5;cursor:not-allowed}
-button.ghost{background:var(--bg3);border:1px solid var(--border2);color:var(--text)}
-button.ghost:hover{background:var(--bg4)}
-button.mini{padding:3px 9px;font-size:12px;border-radius:6px}
+/* 按钮 */
+button.btn{
+  background:var(--grad);border:0;color:#fff;border-radius:10px;
+  padding:9px 18px;cursor:pointer;font-weight:550;font-size:13.5px;
+  box-shadow:0 4px 14px -6px rgba(110,100,255,.55);transition:filter .15s,transform .1s
+}
+button.btn:hover{filter:brightness(1.12)}
+button.btn:active{transform:translateY(1px)}
+button.btn:disabled{opacity:.45;cursor:not-allowed;filter:none;transform:none}
+button.btn.big{padding:11px 26px;font-size:14.5px}
+button.ghost{background:var(--inset);border:1px solid var(--line);color:var(--text);box-shadow:none}
+button.ghost:hover{background:var(--inset-2);border-color:#3a4763;filter:none}
+button.mini{padding:4px 11px;font-size:12px;border-radius:8px}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 
+/* 步骤标题（链接下载页） */
+.step-head{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.step-head .n{
+  width:24px;height:24px;flex:none;border-radius:8px;background:var(--grad);color:#fff;
+  font-size:12.5px;font-weight:700;display:flex;align-items:center;justify-content:center
+}
+.step-head h3{margin:0;font-size:14.5px;font-weight:650}
+.step-head .opt{font-size:11px;color:var(--dim);font-weight:400;margin-left:2px}
+p.hint{margin:0 0 14px;font-size:12.5px;color:var(--muted);line-height:1.65}
+.sec-title{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.8px;margin:20px 0 10px;font-weight:600}
+.sec-title:first-child{margin-top:0}
+
+/* 链接识别面板 */
+.detect-box{margin-top:12px}
+.detect-summary{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.detect-summary .cnt{font-size:13px;color:var(--text);font-weight:550}
+.type-pill{display:inline-flex;align-items:center;gap:5px;background:var(--info-bg);color:#9db9ff;
+  border:1px solid rgba(91,140,255,.25);border-radius:999px;padding:3px 10px;font-size:12px}
+.type-pill.warn{background:var(--warn-bg);color:var(--warn);border-color:rgba(245,184,74,.25)}
+.detect-note{margin-top:8px;font-size:12.5px;line-height:1.6}
+.detect-note.i{color:var(--info)}.detect-note.w{color:var(--warn)}.detect-note.e{color:var(--err)}.detect-note.m{color:var(--muted)}
+
+/* ============================ 表格 ============================ */
 table{width:100%;border-collapse:collapse;font-size:12.5px}
-th{text-align:left;color:var(--muted);font-weight:500;padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
-td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+th{text-align:left;color:var(--dim);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;
+  padding:9px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:9px 12px;border-bottom:1px solid var(--line-soft);vertical-align:top}
 tr:last-child td{border-bottom:0}
-tbody tr:hover{background:var(--bg3)}
-.tbl-wrap{overflow-x:auto;margin:0 -4px}
+tbody tr{transition:background .12s}
+tbody tr:hover{background:rgba(255,255,255,.028)}
+.tbl-wrap{overflow-x:auto;margin:0 -6px;border:1px solid var(--line-soft);border-radius:12px}
+.tbl-wrap table{margin:0}
+.tbl-wrap th:first-child,.tbl-wrap td:first-child{padding-left:14px}
+.tbl-wrap th:last-child,.tbl-wrap td:last-child{padding-right:14px}
 .mono{font-family:var(--mono);font-size:11.5px}
 .ellip{max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:bottom}
 
-.badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:500;white-space:nowrap}
-.b-pending{background:rgba(139,149,167,.16);color:var(--muted)}
-.b-running{background:rgba(88,166,255,.16);color:var(--info)}
-.b-success{background:rgba(63,185,80,.16);color:var(--ok)}
-.b-failed{background:rgba(248,81,73,.16);color:var(--err)}
-.b-cancelled{background:rgba(210,153,34,.16);color:var(--warn)}
-.b-paused{background:rgba(210,153,34,.16);color:var(--warn)}
+/* 徽章 */
+.badge{display:inline-flex;align-items:center;gap:5px;padding:2.5px 10px;border-radius:999px;font-size:11.5px;font-weight:550;white-space:nowrap}
+.badge::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.9}
+.b-pending{background:rgba(152,163,184,.14);color:var(--muted)}
+.b-running{background:var(--info-bg);color:#8fb0ff}
+.b-success{background:var(--ok-bg);color:var(--ok)}
+.b-failed{background:var(--err-bg);color:var(--err)}
+.b-cancelled{background:var(--warn-bg);color:var(--warn)}
+.b-paused{background:var(--warn-bg);color:var(--warn)}
 
-.jobcard{background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:10px}
-.jobcard .top{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:4px}
+/* ============================ 任务卡片 ============================ */
+.jobcard{background:var(--card-deep);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:12px;transition:border-color .18s}
+.jobcard:hover{border-color:#2b3650}
+.jobcard .top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.jobcard .jtype{font-size:11.5px;color:var(--dim);background:rgba(255,255,255,.05);border:1px solid var(--line-soft);border-radius:6px;padding:1px 8px;white-space:nowrap}
 .jobcard .url{font-family:var(--mono);font-size:11.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:120px}
 .jobcard .acts{display:flex;gap:6px;flex-wrap:wrap}
-.bar{height:8px;border-radius:999px;background:var(--bg);border:1px solid var(--border);overflow:hidden;margin:9px 0}
-.bar>i{display:block;height:100%;background:var(--accent);transition:width .3s ease}
-.bar.ok>i{background:var(--ok)}
-.bar.err>i{background:var(--err)}
+.bar{height:10px;border-radius:999px;background:var(--inset);overflow:hidden;margin:10px 0 4px}
+.bar>i{display:block;height:100%;background:var(--grad);border-radius:999px;transition:width .4s ease}
+.bar.ok>i{background:linear-gradient(90deg,#2ecc8f,#34d399)}
+.bar.err>i{background:linear-gradient(90deg,#e05c5c,#ff6b6b)}
 .bar.indet>i{width:34%;animation:slide 1.5s ease-in-out infinite}
-@keyframes slide{0%{margin-left:0}50%{margin-left:66%}100%{margin-left:0}}
-.jobcard .meta{font-size:12px;color:var(--muted);display:flex;gap:14px;flex-wrap:wrap}
-.jobcard .meta b{color:var(--text);font-weight:500}
-.jobcard .line{font-size:12.5px;margin-top:6px;color:var(--text)}
-.jobcard .sub{font-size:11.5px;color:var(--dim);font-family:var(--mono);margin-top:4px;word-break:break-all}
+@keyframes slide{0%{margin-left:-6%}50%{margin-left:70%}100%{margin-left:-6%}}
+.jobcard .meta{font-size:12.5px;color:var(--muted);display:flex;gap:16px;flex-wrap:wrap}
+.jobcard .meta b{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums}
+.jobcard .line{font-size:13px;margin-top:8px;color:var(--text)}
+.jobcard .sub{font-size:11.5px;color:var(--dim);font-family:var(--mono);margin-top:6px;word-break:break-all}
+.jobcard .dirs{margin-top:4px}
+.jobcard .dirline{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11.5px;color:var(--dim);font-family:var(--mono);padding:3px 0}
 
+/* ============================ 空状态 / 提示 ============================ */
+.empty{text-align:center;color:var(--dim);padding:36px 14px;font-size:13px}
+.empty .empty-ico{font-size:26px;opacity:.55;display:block;margin-bottom:8px}
+.code{background:var(--bg);border:1px solid var(--line-soft);border-radius:10px;padding:12px 14px;
+  font-family:var(--mono);font-size:12px;overflow-x:auto;white-space:pre;color:var(--muted);line-height:1.7}
+.panel{display:none}
+.panel.active{display:block;animation:fadeUp .28s ease}
+@keyframes fadeUp{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+.kv{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px dashed var(--line-soft);font-size:12.5px}
+.kv:last-child{border-bottom:0}
+.kv .k{color:var(--muted);flex:none}
+.kv .v{font-family:var(--mono);font-size:11.5px;text-align:right;word-break:break-all}
 
-.empty{text-align:center;color:var(--dim);padding:34px 10px;font-size:13px}
-/* 视频号嗅探链路诊断状态链 */
+/* 连接失败横幅 */
+.conn-banner{
+  display:none;margin:16px 26px 0;padding:12px 16px;border-radius:12px;
+  background:var(--err-bg);border:1px solid rgba(255,107,107,.3);color:#ffb3b3;font-size:13px;
+  align-items:center;gap:10px;flex-wrap:wrap
+}
+.conn-banner.show{display:flex}
+.conn-banner .code{margin:0;padding:2px 8px;display:inline;background:rgba(0,0,0,.3);font-size:11.5px}
+
+/* ============================ 视频号嗅探 ============================ */
 .ch-chain{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
-.ch-step{display:flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--border);
-  border-radius:999px;font-size:12px;background:var(--bg2);color:var(--muted)}
+.ch-step{display:flex;align-items:center;gap:6px;padding:6px 11px;border:1px solid var(--line);
+  border-radius:999px;font-size:12px;background:var(--card-deep);color:var(--muted)}
 .ch-step .ch-mark{font-weight:700;width:14px;text-align:center}
 .ch-step .ch-value{font-family:var(--mono);font-size:11px;color:var(--dim)}
-.ch-step.ok{color:var(--ok);border-color:rgba(63,185,80,.45)}
+.ch-step.ok{color:var(--ok);border-color:rgba(52,211,153,.4)}
 .ch-step.ok .ch-mark{color:var(--ok)}
-.ch-step.bad{color:var(--err);border-color:rgba(248,81,73,.55);background:rgba(248,81,73,.08)}
+.ch-step.bad{color:var(--err);border-color:rgba(255,107,107,.5);background:var(--err-bg)}
 .ch-step.bad .ch-mark{color:var(--err)}
 .ch-step.off{opacity:.55}
+.feed-item{display:flex;gap:12px;align-items:center;padding:10px 4px;border-bottom:1px solid var(--line-soft)}
+.feed-item:last-child{border-bottom:0}
+.feed-item .cover{width:50px;height:50px;object-fit:cover;border-radius:9px;flex:none;background:var(--inset-2)}
+.feed-item .cover-ph{width:50px;height:50px;border-radius:9px;flex:none;background:var(--inset-2);
+  display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--muted)}
+.feed-item .body{flex:1;min-width:0}
+.feed-item .t{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.feed-item .m{font-size:11.5px;color:var(--muted);margin-top:3px}
+.feed-item .st{font-size:11.5px;font-weight:550;white-space:nowrap}
+.feed-item .act{flex:none;min-width:64px;text-align:right;display:flex;gap:8px;align-items:center}
+.feed-item .quality{max-width:220px;font-size:12px;padding:7px 8px}
+.feed-item .saved{font-size:11px;color:var(--muted);margin-top:7px}
+.feed-item .file-path{display:block;font-family:var(--mono);overflow-wrap:anywhere;user-select:text;margin-top:3px}
+.feed-item .file-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:5px}
+
+/* ============================ 通知 / 弹层 ============================ */
 .toasts{position:fixed;right:18px;bottom:18px;display:flex;flex-direction:column;gap:8px;z-index:99}
-.toast{background:var(--bg4);border:1px solid var(--border2);border-left:3px solid var(--accent);
-  border-radius:8px;padding:10px 14px;font-size:13px;max-width:380px;box-shadow:0 6px 22px rgba(0,0,0,.45)}
+.toast{background:#1c2334;border:1px solid var(--line);border-left:3px solid var(--brand);
+  border-radius:10px;padding:11px 15px;font-size:13px;max-width:400px;box-shadow:var(--shadow-pop);
+  animation:toastIn .22s ease;display:flex;gap:8px;align-items:baseline}
+@keyframes toastIn{from{opacity:0;transform:translateX(14px)}to{opacity:1;transform:none}}
 .toast.ok{border-left-color:var(--ok)}.toast.err{border-left-color:var(--err)}.toast.warn{border-left-color:var(--warn)}
+.toast .tico{flex:none;font-weight:700}
+.toast.ok .tico{color:var(--ok)}.toast.err .tico{color:var(--err)}.toast.warn .tico{color:var(--warn)}.toast .tico{color:var(--info)}
+
+.modal-mask{position:fixed;inset:0;background:rgba(5,7,11,.66);backdrop-filter:blur(4px);
+  display:none;align-items:center;justify-content:center;z-index:80;padding:20px}
+.modal-mask.open{display:flex;animation:fadeUp .2s ease}
+.modal{background:var(--card);border:1px solid var(--line);border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-pop);width:100%;max-width:460px;padding:22px}
+.modal h3{margin:0 0 4px;font-size:15px;font-weight:650}
+.modal .m-hint{font-size:12.5px;color:var(--muted);margin:0 0 14px;line-height:1.65}
+.modal .m-row{display:flex;gap:10px;margin-top:14px;justify-content:flex-end}
+
+.dir-list{height:300px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:var(--inset)}
+.dir-item{display:flex;align-items:center;gap:8px;padding:7px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--line-soft)}
+.dir-item:last-child{border-bottom:none}
+.dir-item:hover{background:var(--inset-2)}
+.dir-item.sel{background:var(--info-bg);box-shadow:inset 2px 0 0 var(--info)}
+.dir-item .dico{flex:none}
+
 .pager{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:12px;font-size:12px;color:var(--muted)}
-.code{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px 12px;
-  font-family:var(--mono);font-size:12px;overflow-x:auto;white-space:pre;color:var(--muted)}
-.sec-title{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin:20px 0 10px}
-.sec-title:first-child{margin-top:0}
-.panel{display:none}.panel.active{display:block}
-.kv{display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px dashed var(--border);font-size:12.5px}
-.kv:last-child{border-bottom:0}
-.kv .k{color:var(--muted)}.kv .v{font-family:var(--mono);font-size:11.5px;text-align:right;word-break:break-all}
+
+/* ============================ 响应式 ============================ */
+@media (max-width:1060px){
+  .sidebar{width:64px;flex:0 0 64px}
+  .brand{padding:14px 13px;justify-content:center}
+  .brand .bt{display:none}
+  .nav-group-title{text-align:center;padding:12px 0 6px}
+  .nav-group-title::after{content:"·";letter-spacing:0}
+  .nav-group-title span{display:none}
+  .nav button{justify-content:center;padding:10px 0}
+  .nav button .nav-label{display:none}
+  .side-foot{padding:10px 8px;text-align:center}
+  .side-foot .ver{display:none}
+  .content{padding:18px 16px 50px}
+  .topbar{padding:12px 16px}
+  .conn-banner{margin:14px 16px 0}
+}
+@media (max-width:720px){
+  .grid.g4{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+  .hero-step{min-width:100%}
+}
+/* 可读性与操作层级：保留离线单文件控制台。 */
+html[data-theme="light"]{
+  color-scheme:light;--bg:#f4f5f9;--panel:#fff;--card:#fff;--card-deep:#f8f9fc;
+  --inset:#f5f6fa;--inset-2:#eaedf5;--line:#dce1ec;--line-soft:#e9ecf3;
+  --text:#20283c;--muted:#58657c;--dim:#69768d;--brand:#6553db;--brand-2:#8272e7;
+  --grad:linear-gradient(135deg,#6553db,#8372e7);--info:#6553db;
+  --ok:#147b59;--warn:#996009;--err:#c23945;
+  --ok-bg:#e8f5ee;--warn-bg:#fff5df;--err-bg:#fff0f0;--info-bg:#eeebfc;
+  --shadow-card:0 3px 16px -10px rgba(31,42,72,.15);--shadow-pop:0 16px 48px -12px rgba(31,42,72,.22);
+}
+body{background-image:none;font-size:14px}
+[hidden]{display:none!important}
+:focus-visible{outline:3px solid var(--brand);outline-offset:3px}
+button,input,select,textarea{font-size:14px}
+.sidebar{width:232px;flex-basis:232px;background:var(--panel)}
+.brand{padding:26px 20px}.brand h1{font-size:16px}.brand p{color:var(--muted)}
+.nav button{padding:12px;min-height:44px}.nav button.active{background:var(--info-bg);color:var(--brand);box-shadow:none}
+.nav button.active:hover{background:var(--info-bg)}
+.nav .nav-label{display:flex;align-items:center;gap:8px;flex:1}
+.topbar{padding:18px 30px;min-height:72px}.topbar h2{font-size:19px}.topbar .sub{color:var(--muted)}
+.content{padding:28px 30px 64px;max-width:1220px}.card{padding:24px;box-shadow:var(--shadow-card)}
+.card:hover,.stat:hover{border-color:var(--line);transform:none}
+.hero{background:linear-gradient(120deg,var(--info-bg),var(--card));border-color:var(--line);padding:30px}
+.hero h3{font-size:27px;letter-spacing:-.5px}.hero p{font-size:14px;max-width:680px}
+.eyebrow{font-size:11px;letter-spacing:1.6px;color:var(--brand);font-weight:700;margin-bottom:10px}
+.hero-step{background:var(--card);border-color:var(--line);padding:16px}.hero-step span{font-size:12px}
+.platform-strip{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0;color:var(--muted);font-size:12px}
+.platform-strip span{padding:4px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card)}
+.page-intro{margin:0 0 20px}.page-intro h3{font-size:23px;margin:0 0 6px}.page-intro p{margin:0;color:var(--muted)}
+.step-head{margin-bottom:12px}.step-head h3{font-size:16px}
+.step-head .n{background:var(--info-bg);color:var(--brand);border-radius:50%;width:28px;height:28px}
+#dlLinks{font-family:inherit;font-size:14px;min-height:155px;padding:16px;line-height:1.8}
+.chip{border-radius:8px}.chip.on{background:var(--info-bg);color:var(--brand);border-color:var(--brand);box-shadow:none}
+.hint{color:var(--muted)}.sw{min-height:36px}.sec-title{color:var(--muted)}
+.advanced{padding:0;overflow:hidden}.advanced>summary{cursor:pointer;padding:20px 24px;font-weight:600;font-size:15px}
+.advanced>summary span{font-size:12px;font-weight:400;color:var(--muted);margin-left:8px}
+.advanced-body{padding:0 24px 24px}.advanced[open]>summary{border-bottom:1px solid var(--line-soft);margin-bottom:20px}
+.submit-bar{position:sticky;bottom:12px;z-index:15;background:var(--panel);border:1px solid var(--line);border-radius:14px;
+  padding:16px 20px;box-shadow:var(--shadow-pop);display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.submit-info{flex:1;min-width:180px}.submit-info b{display:block}.submit-info small{display:block;color:var(--muted);margin-top:3px;overflow-wrap:anywhere}
+.validation{border-radius:10px;color:var(--err);background:var(--err-bg);padding:12px 16px;margin-bottom:12px}
+.detect-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line-soft);font-size:12px}
+.detect-row .link{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
+.detect-row .type-pill{min-width:84px;text-align:center;background:var(--info-bg);color:var(--brand)}
+.job-tools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px}.job-tools input{flex:1;min-width:160px}.job-tools select{width:160px}
+.settings-actions{position:sticky;top:72px;z-index:16}.settings-actions .hint{margin-top:0}
+.inline-note{padding:12px 14px;background:var(--info-bg);border-radius:10px;color:var(--muted);font-size:12px;margin:12px 0}
+.skip-link{position:fixed;left:12px;top:-70px;z-index:100;background:var(--card);padding:12px}.skip-link:focus{top:12px}
+html[data-theme="light"] .toast{background:#fff}html[data-theme="light"] .conn-banner{color:var(--err)}
+html[data-theme="light"] .hero,html[data-theme="light"] .card,html[data-theme="light"] .stat{border-color:var(--line)}
+html[data-theme="light"] .badge{filter:saturate(.75)}
+.modal{max-height:90vh;overflow:auto}input[type=password]{width:100%;padding:9px 12px;background:var(--inset);border:1px solid var(--line);border-radius:10px}
+@media (min-width:721px) and (max-width:1060px){
+  .sidebar{width:200px;flex-basis:200px}.brand{padding:20px 14px}.brand .bt{display:block}
+  .nav button{justify-content:flex-start;padding:11px 9px}.nav button .nav-label{display:flex}
+  .nav-group-title{text-align:left;padding:14px 10px 6px}.nav-group-title span{display:inline}.nav-group-title::after{content:none}
+  .side-foot{text-align:left;padding:14px}.side-foot .ver{display:block}.topbar .sub{display:none}
+  .content{padding:20px}.topbar{padding:16px 20px}
+}
+@media (max-width:720px){
+  .layout{display:block}.sidebar{width:100%;height:auto;position:static;border-right:0;border-bottom:1px solid var(--line)}
+  .brand{padding:12px 16px;justify-content:flex-start;border-bottom:0}.brand .bt{display:block}.brand p{display:none}
+  .nav{display:flex;gap:4px;overflow-x:auto;padding:0 12px 10px;flex:none}.nav-group-title,.side-foot{display:none}
+  .nav button{flex:0 0 auto;width:auto;padding:9px 12px;gap:6px;margin:0;white-space:nowrap}.nav button .nav-label{display:flex}.nav .glyph{display:none}
+  .topbar{padding:12px 16px;min-height:60px}.topbar .sub{display:none}.content{padding:18px 14px 30px}
+  .hero{padding:22px}.hero h3{font-size:23px}.hero-steps{gap:8px}.hero-step{padding:12px}
+  .card{padding:18px}.grid.g3,.grid.g4{grid-template-columns:repeat(auto-fit,minmax(145px,1fr))}
+  .submit-bar{bottom:6px;padding:14px;gap:10px}.submit-bar .btn.big{flex:1}.submit-info{flex-basis:100%}
+  .jobcard .top{flex-wrap:wrap}.jobcard .acts{width:100%;margin-left:0}.settings-actions{top:60px}
+  .feed-item{flex-wrap:wrap}.feed-item .act{width:100%;justify-content:flex-end}.feed-item .quality{max-width:calc(100% - 95px)}
+  .advanced{padding:0}.advanced>summary{padding:18px}.advanced-body{padding:0 18px 18px}.toasts{left:14px;right:14px}.toast{max-width:100%}
+}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 </style>
 </head>
 <body>
+<a class="skip-link" href="#mainContent">跳到主要内容</a>
 <div class="layout">
   <aside class="sidebar">
     <div class="brand">
-      <h1>抖音下载器 · 控制台</h1>
-      <p id="brandSub">正在连接服务…</p>
+      <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="M7.5 11.5L12 16l4.5-4.5"/><path d="M4.5 19.5h15"/></svg></div>
+      <div class="bt">
+        <h1>视频下载工作台</h1>
+        <p id="brandSub">正在连接服务…</p>
+      </div>
     </div>
-    <nav class="nav" id="nav">
-      <button data-tab="overview" class="active"><svg class="glyph" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="1" width="6" height="6" rx="1.5"/><rect x="9" y="1" width="6" height="6" rx="1.5"/><rect x="1" y="9" width="6" height="6" rx="1.5"/><rect x="9" y="9" width="6" height="6" rx="1.5"/></svg>总览</button>
-      <button data-tab="download"><svg class="glyph" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1v8.6L4.7 6.3 3.3 7.7 8 12.4l4.7-4.7-1.4-1.4L8 9.6V1H8z"/><rect x="2" y="13" width="12" height="2" rx="1"/></svg>链接下载</button>
-      <button data-tab="jobs"><svg class="glyph" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="3" width="14" height="2.6" rx="1.3"/><rect x="1" y="7.5" width="14" height="2.6" rx="1.3"/><rect x="1" y="12" width="9" height="2.6" rx="1.3"/></svg>任务中心</button>
-      <button data-tab="discovery"><svg class="glyph" viewBox="0 0 16 16" fill="currentColor"><path d="M7 1a6 6 0 1 0 3.7 10.7l3.3 3.3 1.4-1.4-3.3-3.3A6 6 0 0 0 7 1zm0 2a4 4 0 1 1 0 8 4 4 0 0 1 0-8z"/></svg>数据发现</button>
-      <button data-tab="channels"><svg class="glyph" viewBox="0 0 16 16" fill="currentColor"><path d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v6A1.5 1.5 0 0 1 12.5 11H8.4L5 13.8V11H3.5A1.5 1.5 0 0 1 2 9.5v-6z"/></svg>视频号</button>
-      <button data-tab="archive"><svg class="glyph" viewBox="0 0 16 16" fill="currentColor"><path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h11A1.5 1.5 0 0 1 15 3.5V5H1V3.5zM1 6.5h14v6A1.5 1.5 0 0 1 13.5 14h-11A1.5 1.5 0 0 1 1 12.5v-6zm4 2v1.5h6V8.5H5z"/></svg>下载档案</button>
-      <button data-tab="settings"><svg class="glyph" viewBox="0 0 16 16" fill="currentColor"><path d="M8 5.2A2.8 2.8 0 1 0 8 10.8 2.8 2.8 0 0 0 8 5.2zm0 1.6a1.2 1.2 0 1 1 0 2.4 1.2 1.2 0 0 1 0-2.4z"/><path d="M7.1 1h1.8l.3 1.7 1.3.5 1.4-1 1.3 1.3-1 1.4.5 1.3 1.7.3v1.8l-1.7.3-.5 1.3 1 1.4-1.3 1.3-1.4-1-1.3.5-.3 1.7H7.1l-.3-1.7-1.3-.5-1.4 1L2.8 12l1-1.4-.5-1.3L1.6 9V7.2l1.7-.3.5-1.3-1-1.4L4.1 2.9l1.4 1 1.3-.5L7.1 1z"/></svg>配置中心</button>
-      <button data-tab="about"><svg class="glyph" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 2.6a1.1 1.1 0 1 1 0 2.2 1.1 1.1 0 0 1 0-2.2zM6.6 7h2.2v5.4H6.6V7z"/></svg>关于</button>
+    <nav class="nav" id="nav" aria-label="主要导航">
+      <button data-tab="overview" class="active"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/></svg><span class="nav-label">总览</span></button>
+
+      <div class="nav-group-title"><span>下载</span></div>
+      <button data-tab="download"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10.5"/><path d="M8 11l4 4 4-4"/><path d="M4.5 16.5v1.8A2.2 2.2 0 0 0 6.7 20.5h10.6a2.2 2.2 0 0 0 2.2-2.2v-1.8"/></svg><span class="nav-label">链接下载</span></button>
+      <button data-tab="jobs"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5h2m-2 5.5h2m-2 5.5h2"/><rect x="8" y="3.5" width="12.5" height="7" rx="2"/><rect x="8" y="13.5" width="12.5" height="7" rx="2"/></svg><span class="nav-label">任务中心<span class="nav-badge" id="navJobsBadge" style="display:none">0</span></span></button>
+
+      <div class="nav-group-title"><span>发现与捕获</span></div>
+      <button data-tab="discovery"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="M15.8 15.8L20.5 20.5"/><path d="M8.5 11l1.7 1.7 3.3-3.4"/></svg><span class="nav-label">数据发现</span></button>
+      <button data-tab="channels"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a7.5 7.5 0 0 1-7.5 7.5c-.9 0-1.8-.2-2.6-.4L6.5 20.5l1-3.4A7.5 7.5 0 1 1 21 11.5z"/><path d="M10.2 9.4v4.2l3.8-2.1z" fill="currentColor" stroke="none"/></svg><span class="nav-label">视频号</span></button>
+
+      <div class="nav-group-title"><span>记录与设置</span></div>
+      <button data-tab="archive"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="17" height="5" rx="1.5"/><path d="M5.5 9v8.5A2.5 2.5 0 0 0 8 20h8a2.5 2.5 0 0 0 2.5-2.5V9"/><path d="M10 13h4"/></svg><span class="nav-label">下载档案</span></button>
+      <button data-tab="settings"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7.5h9M17 7.5h3"/><circle cx="15" cy="7.5" r="2.2"/><path d="M4 16.5h3M11 16.5h9"/><circle cx="9" cy="16.5" r="2.2"/></svg><span class="nav-label">配置中心</span></button>
+      <button data-tab="about"><svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5"/><circle cx="12" cy="8" r=".4" fill="currentColor"/></svg><span class="nav-label">关于</span></button>
     </nav>
     <div class="side-foot">
-      <div><span class="dot" id="connDot"></span><span id="connText">未连接</span></div>
-      <div style="margin-top:6px" id="verText">—</div>
+      <div class="conn-line" id="btnConnSettings" title="连接设置" role="button" tabindex="0">
+        <span class="dot" id="connDot"></span><span id="connText">未连接</span>
+      </div>
+      <div class="ver" id="verText">—</div>
     </div>
   </aside>
 
@@ -190,84 +488,117 @@ tbody tr:hover{background:var(--bg3)}
       <h2 id="pageTitle">总览</h2>
       <span class="sub" id="pageSub"></span>
       <span class="spacer"></span>
-      <input type="text" id="apiBase" placeholder="API 地址（默认同源）" style="width:230px">
-      <button class="btn ghost mini" id="btnPing">测试连接</button>
+      <button class="ghost mini btn" id="themeToggle" type="button" aria-label="切换明暗主题">深色模式</button>
+      <button class="ghost mini btn" id="btnConnSettings2" style="display:none">连接设置</button>
     </div>
-    <div class="content">
+    <div class="conn-banner" id="connBanner">
+      <b>无法连接服务</b>
+      <span>请在项目目录运行 <span class="code">python run.py --serve --serve-port 8000</span> 后重试。</span>
+      <span style="flex:1"></span>
+      <button class="ghost mini btn" id="connRetry">重试连接</button>
+    </div>
+    <main class="content" id="mainContent" tabindex="-1">
 
-      <!-- 总览 -->
+      <!-- ==================== 总览 ==================== -->
       <section class="panel active" id="panel-overview">
+        <div class="hero">
+          <div class="eyebrow">YOUR LOCAL VIDEO LIBRARY</div>
+          <div class="hero-title">
+            <h3>喜欢的视频，轻松存到本地。</h3>
+          </div>
+          <p>粘贴分享链接，自动识别平台。下载单条作品，或按范围批量保存作者内容。</p>
+          <div class="platform-strip"><span>抖音</span><span>哔哩哔哩</span><span>快手</span><span>小红书</span><span>微博 / 西瓜 / 头条</span><span>爱奇艺 / 腾讯 / 优酷 / 芒果</span><span>微信视频号 · 专用入口</span></div>
+          <div class="hero-steps">
+            <div class="hero-step"><span class="n">1</span><div><b>粘贴链接</b><span>直接粘贴 App 分享文案或作者主页链接，自动识别类型</span></div></div>
+            <div class="hero-step"><span class="n">2</span><div><b>确认下载范围</b><span>单条作品直接下载，批量内容默认先取 20 条</span></div></div>
+            <div class="hero-step"><span class="n">3</span><div><b>查看进度</b><span>提交后自动跳转任务中心，实时显示下载进度</span></div></div>
+          </div>
+          <div class="hero-act">
+            <button class="btn big" id="heroStart">新建下载</button>
+            <button class="ghost btn" id="heroArchive">查看下载档案</button>
+          </div>
+        </div>
+        <div class="inline-note" id="ovSetup" role="status">正在检查服务和保存位置…</div>
+
         <div class="grid g4" style="margin-bottom:16px">
-          <div class="stat"><div class="k">服务状态</div><div class="v" id="sHealth">—</div></div>
-          <div class="stat"><div class="k">Cookie 状态</div><div class="v" id="sCookie">—</div></div>
-          <div class="stat"><div class="k">任务总数</div><div class="v" id="sJobs">—</div></div>
-          <div class="stat"><div class="k">档案作品数</div><div class="v" id="sArchive">—</div></div>
+          <div class="stat"><div class="stat-ico blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 13a8.5 8.5 0 0 1 17 0"/><path d="M12 13l3.5-3.5"/><circle cx="12" cy="13" r="1" fill="currentColor"/><path d="M5 17.5h14"/></svg></div><div><div class="k">服务状态</div><div class="v" id="sHealth">—</div></div></div>
+          <div class="stat"><div class="stat-ico green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 8.5a3.5 3.5 0 1 0-3.5 3.5c.6 0 1 .4 1 1v1.5"/><circle cx="12" cy="17.5" r=".4" fill="currentColor"/><circle cx="12" cy="12" r="8.5"/></svg></div><div><div class="k">抖音登录信息</div><div class="v" id="sCookie">—</div></div></div>
+          <div class="stat"><div class="stat-ico purple"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="17" height="5" rx="1.5"/><path d="M5.5 9v8.5A2.5 2.5 0 0 0 8 20h8a2.5 2.5 0 0 0 2.5-2.5V9"/><path d="M10 13h4"/></svg></div><div><div class="k">任务总数</div><div class="v" id="sJobs">—</div></div></div>
+          <div class="stat"><div class="stat-ico gold"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c.8-3.5 3.6-5.5 7-5.5s6.2 2 7 5.5"/></svg></div><div><div class="k">档案作品数</div><div class="v" id="sArchive">—</div></div></div>
         </div>
         <div class="grid g2">
           <div class="card">
-            <h3>运行参数</h3>
+            <h3><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5h10M18 6.5h2M4 12h2M10 12h10M4 17.5h13"/></svg>运行参数</h3>
             <p class="hint">来自 config.yml 的当前生效值</p>
             <div id="ovRuntime"></div>
           </div>
           <div class="card">
-            <h3>任务分布</h3>
+            <h3><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 20.5l4-1L19.5 7.5a2.1 2.1 0 0 0-3-3L4.5 16.5l-1 4z"/><path d="M13.5 6.5l4 4"/></svg>任务分布</h3>
             <p class="hint">本进程内任务的实时状态统计</p>
             <div id="ovJobs"></div>
           </div>
         </div>
         <div class="card">
-          <h3>下载目录</h3>
+          <h3><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5l8.5 6 8.5-6"/><rect x="3.5" y="5" width="17" height="14" rx="2.5"/></svg>下载目录</h3>
           <p class="hint">视频保存在本机的这个文件夹里。浏览器不能直接打开本地目录，所以由本机服务端代开；打不开时可复制路径自己粘贴到资源管理器。</p>
           <div class="kv"><span class="k">绝对路径</span><span class="v" id="ovDirPath">—</span></div>
-          <div class="row" style="margin-top:12px">
+          <div class="row" style="margin-top:14px">
             <button class="btn" id="ovOpenDir">打开文件夹</button>
-            <button class="btn ghost" id="ovCopyDir">复制路径</button>
+            <button class="ghost btn" id="ovCopyDir">复制路径</button>
           </div>
         </div>
         <div class="card">
-          <h3>近 30 天热门作者</h3>
+          <h3><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 20.5l-4-4 4-4"/><path d="M4 16.5h9a7 7 0 0 0 7-7v-2"/></svg>近 30 天热门作者</h3>
           <p class="hint">按已下载作品数量聚合（依赖 database 与 author_sec_uid）</p>
           <div class="tbl-wrap" id="ovAuthors"></div>
         </div>
         <div class="card">
-          <h3>服务端信息</h3>
+          <h3><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M7.5 9h9M7.5 12.5h9M7.5 16h5"/></svg>服务端信息</h3>
           <div id="ovServer"></div>
         </div>
       </section>
 
-      <!-- 链接下载 -->
+      <!-- ==================== 链接下载 ==================== -->
       <section class="panel" id="panel-download">
+        <div class="page-intro"><h3>把链接交给我们</h3><p>支持整段分享文案、多平台混合粘贴。所有选项只作用于本次下载。</p></div>
         <div class="card">
-          <h3>下载链接</h3>
-          <p class="hint">每行一个链接，也<b>可以直接粘贴抖音 App 的整条分享文案</b>——会自动提取其中的链接并忽略多余文字。支持 <b>作者主页批量下载</b>、视频 / 图文 / 合集 / 音乐 / 收藏夹 / 直播间，短链会自动解析；<b>B 站链接同样支持</b>（单稿件、UP 主投稿、合集 / 系列、收藏夹、b23.tv 短链、裸 BV 号），按域名自动分流。</p>
-          <textarea id="dlLinks" rows="6" placeholder="作者主页（批量下载该博主作品）：&#10;https://www.douyin.com/user/MS4wLjABAAAA6O7EZyfDRYXxJrUTpf91K3tmB4rBROkAw-nYMfld8ss&#10;&#10;单条作品：&#10;https://www.douyin.com/video/7604129988555574538"></textarea>
+          <div class="step-head"><span class="n">1</span><h3>粘贴链接</h3><span class="opt">必填</span></div>
+          <p class="hint" id="dlLinksHelp">视频链接、作者主页、合集、收藏夹或 B 站 BV 号均可。分享文案里的链接会自动提取，重复链接只提交一次。</p>
+          <textarea id="dlLinks" rows="5" aria-label="需要下载的链接或分享文案" aria-describedby="dlLinksHelp" placeholder="在这里粘贴视频链接或 App 分享文案…&#10;可以一次粘贴多个链接，也支持作者主页和 B 站 BV 号。" spellcheck="false"></textarea>
           <div class="row" style="margin-top:10px">
-            <button class="btn ghost mini" id="dlDemoAuthor">示例 · 作者主页批量</button>
-            <button class="btn ghost mini" id="dlDemo">示例 · 单条视频</button>
-            <button class="btn ghost mini" id="dlClear">清空</button>
-            <span class="sub" id="dlCount" style="color:var(--dim);font-size:12px">识别到 0 条链接</span>
+            <button class="ghost mini btn" id="dlDemoAuthor">示例 · 作者主页批量</button>
+            <button class="ghost mini btn" id="dlDemo">示例 · 单条视频</button>
+            <button class="ghost mini btn" id="dlDemoBili">示例 · B 站</button>
+            <button class="ghost mini btn" id="dlClear">清空</button>
           </div>
-          <div id="dlDetect" style="margin-top:12px"></div>
+          <div class="detect-box" id="dlDetect" aria-live="polite"></div>
         </div>
 
         <div class="card">
-          <h3>批量下载范围（作者主页 / 收藏夹链接需要）</h3>
-          <p class="hint">仅对本次提交生效，不写入配置文件。单条视频 / 图文 / 合集 / 音乐 / 直播间链接不需要在这里选择。</p>
-          <div class="sec-title">要批量下载作者主页的哪些内容（mode）</div>
+          <div class="step-head"><span class="n">2</span><h3>确认保存方式</h3><span class="opt">已有推荐设置</span></div>
+          <p class="hint" id="dlScopeHint">选择画质即可开始。粘贴主页或合集链接后，会显示对应的批量选项。</p>
+          <div class="grid g2">
+            <label class="field"><span>视频画质</span><select id="dlQuality"></select></label>
+            <label class="field" id="dlBatchField" hidden><span>每个链接最多下载几条（0 = 全部）</span><input type="number" id="dlBatchLimit" min="0" step="1" value="20"></label>
+          </div>
+          <div id="dlDouyinScope" hidden>
+          <div class="sec-title">要批量下载作者主页的哪些内容</div>
           <div class="chips" id="dlModes"></div>
           <div id="dlNotice" style="font-size:12px;color:var(--warn);margin-bottom:12px"></div>
           <div class="grid g4" id="dlNumbers"></div>
           <div class="row" id="dlQuick" style="margin:2px 0 14px"></div>
-          <div class="grid g3" style="margin-top:4px">
-            <label class="field"><span>下载画质（video_quality）</span>
-              <select id="dlQuality"></select></label>
-            <label class="field"><span>起始日期（start_time）</span><input type="date" id="dlStart"></label>
-            <label class="field"><span>结束日期（end_time）</span><input type="date" id="dlEnd"></label>
+          </div>
+          <div class="grid g2" id="dlDateScope" hidden style="margin-top:4px">
+            <label class="field"><span>起始日期</span><input type="date" id="dlStart"></label>
+            <label class="field"><span>结束日期</span><input type="date" id="dlEnd"></label>
           </div>
         </div>
 
-        <div class="card">
-          <h3>下载内容</h3>
+        <details class="card advanced" id="dlExtras">
+          <summary>更多下载选项 <span>封面、评论、转写 · 按需设置</span></summary>
+          <div class="advanced-body">
+          <p class="hint" id="dlExtraHint">以下附加内容适用于抖音。其他平台使用各自的默认设置。</p>
+          <div id="dlDouyinExtras">
           <p class="hint">默认只保存视频本体，附带产物按需开启（每多一项就多一份请求与文件）。</p>
           <div class="grid g4" id="dlContent"></div>
           <div class="sec-title">评论采集</div>
@@ -278,34 +609,39 @@ tbody tr:hover{background:var(--bg3)}
               <input type="number" id="dlCommentsMax" min="0" value="500"></label>
           </div>
           <div class="sec-title">视频转写</div>
-          <div class="sw"><label class="sw" style="margin:0"><input type="checkbox" id="dlTranscript"><span>下载后调用 OpenAI 转写（需在配置中心填好密钥环境变量）</span></label></div>
-        </div>
+          <div class="sw"><label class="sw" style="margin:0"><input type="checkbox" id="dlTranscript"><span>下载后生成文字稿（需先配置转写服务与密钥）</span></label></div>
+          </div></div>
+        </details>
 
-        <div class="row">
-          <button class="btn" id="dlSubmit">提交下载任务</button>
-          <button class="btn ghost" id="dlPreview">预览提交参数</button>
+        <div class="validation" id="dlValidation" role="alert" hidden></div>
+        <div class="submit-bar">
+          <div class="submit-info"><b id="dlSummary">先粘贴一个链接</b><small id="dlSavePath">正在读取保存位置…</small></div>
+          <button class="ghost btn" id="dlPreview">检查下载清单</button>
+          <button class="btn big" id="dlSubmit" disabled>开始下载</button>
         </div>
         <div id="dlResult" style="margin-top:16px"></div>
       </section>
 
-      <!-- 任务中心 -->
+      <!-- ==================== 任务中心 ==================== -->
       <section class="panel" id="panel-jobs">
+        <div class="page-intro"><h3>下载进度，一眼看清</h3><p>排队中的任务会自动开始。暂停、继续和重试都在每条任务右侧。</p></div>
         <div class="card">
+          <div class="job-tools"><input type="text" id="jobSearch" placeholder="搜索链接、作者或作品标题" aria-label="搜索任务"><select id="jobFilter" aria-label="按任务状态筛选"><option value="all">全部状态</option><option value="active">排队与下载中</option><option value="paused">已暂停</option><option value="failed">失败 / 部分失败</option><option value="success">已完成</option><option value="cancelled">已取消</option></select></div>
           <div class="row" style="margin-bottom:14px">
-            <button class="btn ghost mini" id="jobRefresh">立即刷新</button>
-            <button class="btn ghost mini" id="jobClear">清空已结束</button>
-            <label class="sw" style="margin:0"><input type="checkbox" id="jobAuto" checked><span>自动刷新（1.5 秒）</span></label>
+            <button class="ghost mini btn" id="jobRefresh">立即刷新</button>
+            <button class="ghost mini btn" id="jobClear" title="只清理任务记录，已下载文件会保留">清理已结束记录</button>
+            <label class="sw" style="margin:0"><input type="checkbox" id="jobAuto" checked><span>自动更新进度</span></label>
             <span class="spacer" style="flex:1"></span>
             <span id="jobSummary" style="font-size:12px;color:var(--muted)"></span>
           </div>
-          <div id="jobList"></div>
+          <div id="jobList" aria-live="off"></div>
         </div>
       </section>
 
-      <!-- 数据发现 -->
+      <!-- ==================== 数据发现 ==================== -->
       <section class="panel" id="panel-discovery">
         <div class="card">
-          <h3>抖音热搜榜</h3>
+          <h3><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 14l4-9 9 2.5 4 7.5-9 4.5z"/><path d="M7.5 5l9 2.5"/><path d="M9 11.5a2 2 0 1 0 4 0 2 2 0 0 0-4 0z"/></svg>抖音热搜榜</h3>
           <p class="hint">抓取当前热搜词条并导出为 JSONL 快照（保存在 下载目录/hot_board/）。</p>
           <div class="row">
             <label class="field" style="margin:0;width:150px"><span>取前 N 条（0 = 全部）</span>
@@ -315,7 +651,7 @@ tbody tr:hover{background:var(--bg3)}
           <div id="hotResult" style="margin-top:14px"></div>
         </div>
         <div class="card">
-          <h3>关键词搜索</h3>
+          <h3><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="M15.8 15.8L20.5 20.5"/></svg>关键词搜索</h3>
           <p class="hint">按关键词搜索作品并导出 JSONL（保存在 下载目录/search/）。结果可复制链接回到「链接下载」。</p>
           <div class="row">
             <label class="field" style="margin:0;flex:1;min-width:200px"><span>关键词</span>
@@ -328,11 +664,13 @@ tbody tr:hover{background:var(--bg3)}
         </div>
       </section>
 
-      <!-- 视频号（嗅探） -->
+      <!-- ==================== 视频号（嗅探） ==================== -->
       <section class="panel" id="panel-channels">
+        <div class="page-intro"><h3>在微信里发现，在这里保存</h3><p>视频号需要配合电脑微信。启动捕获后，重新打开微信并播放目标视频，等待下方确认微信已连接。</p></div>
+        <div class="hero-steps" style="margin:0 0 18px"><div class="hero-step"><span class="n">1</span><div><b>检查连接证书</b><span>初次使用先安装本机证书；详情可查看安装状态。</span></div></div><div class="hero-step"><span class="n">2</span><div><b>启动捕获，打开微信</b><span>打开视频号并播放目标作品，保持会话运行。</span></div></div><div class="hero-step"><span class="n">3</span><div><b>在捕获列表点击下载</b><span>用完点击停止，会恢复会话前的代理设置。</span></div></div></div>
         <div class="card">
-          <h3>视频号嗅探会话</h3>
-          <p class="hint">视频号没有免登录网页版：启动嗅探后，工具接管系统代理，向视频号页面注入下载按钮，并被动读取微信内嵌浏览器流量中的视频直链与解密密钥——在微信里打开视频号刷视频，点页面里的「下载」按钮即可保存（结束会话自动还原系统代理）。依赖 mitmproxy（pip install ".[channels]"）。</p>
+          <h3><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a7.5 7.5 0 0 1-7.5 7.5c-.9 0-1.8-.2-2.6-.4L6.5 20.5l1-3.4A7.5 7.5 0 1 1 21 11.5z"/></svg>视频号嗅探会话</h3>
+          <p class="hint">会话运行时临时使用本机代理；点击停止后恢复。捕获失败时，下方诊断会显示需要完成的步骤。</p>
           <div class="row" style="align-items:center;gap:10px;flex-wrap:wrap">
             <span class="dot" id="chDot"></span>
             <span id="chStateText" style="font-size:12.5px">未启动</span>
@@ -340,16 +678,16 @@ tbody tr:hover{background:var(--bg3)}
             <label style="font-size:12.5px;display:flex;align-items:center;gap:6px;margin:0">
               <input type="checkbox" id="chAutoDownload"> 自动下载
             </label>
-            <button class="btn" id="chStartBtn">启动嗅探</button>
-            <button class="btn ghost" id="chStopBtn" disabled>停止</button>
+            <button class="btn" id="chStartBtn">启动捕获</button>
+            <button class="ghost btn" id="chStopBtn" disabled>停止</button>
           </div>
           <div class="row" style="margin-top:12px;align-items:center;gap:10px;flex-wrap:wrap">
             <span style="font-size:12.5px;color:var(--muted)">根证书：</span>
             <span id="chCertText" style="font-size:12.5px;font-family:var(--mono)">—</span>
-            <button class="btn ghost mini" id="chInstallBtn">安装证书</button>
-            <button class="btn ghost mini" id="chCertDetailBtn">详情</button>
-            <button class="btn ghost mini" id="chUninstallBtn">卸载证书</button>
-            <button class="btn ghost mini" id="chRepairNetBtn" title="恢复上次异常退出残留的系统代理（幂等）">恢复网络</button>
+            <button class="ghost mini btn" id="chInstallBtn">安装证书</button>
+            <button class="ghost mini btn" id="chCertDetailBtn">详情</button>
+            <button class="ghost mini btn" id="chUninstallBtn">卸载证书</button>
+            <button class="ghost mini btn" id="chRepairNetBtn" title="恢复上次异常退出残留的系统代理（幂等）">恢复网络</button>
             <span id="chStatsText" style="font-size:12.5px;color:var(--muted);margin-left:auto"></span>
           </div>
           <div class="row" style="margin-top:12px;align-items:flex-end;gap:10px;flex-wrap:wrap">
@@ -361,8 +699,9 @@ tbody tr:hover{background:var(--bg3)}
           <p class="hint" id="chHint" style="margin-top:8px"></p>
         </div>
         <div class="card">
-          <h3>嗅探链路诊断 <span id="chStageText" style="color:var(--muted);font-weight:400;font-size:12px"></span></h3>
+          <h3>连接与捕获诊断 <span id="chStageText" style="color:var(--muted);font-weight:400;font-size:12px"></span></h3>
           <div id="chChain" class="ch-chain"></div>
+          <p class="hint" id="chWechatText" style="margin-top:8px"></p>
           <p class="hint" id="chAdvice" style="margin-top:8px"></p>
         </div>
         <div class="card">
@@ -371,10 +710,10 @@ tbody tr:hover{background:var(--bg3)}
         </div>
       </section>
 
-      <!-- 下载档案 -->
+      <!-- ==================== 下载档案 ==================== -->
       <section class="panel" id="panel-archive">
         <div class="card">
-          <h3>下载清单（manifest）</h3>
+          <h3><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5h16M4 12h16M4 18.5h10"/></svg>下载清单（manifest）</h3>
           <p class="hint">download_manifest.jsonl 的最近记录，含日期 / 标题 / 作者 / 标签 / 文件路径。</p>
           <div class="row">
             <label class="field" style="margin:0;width:150px"><span>显示条数</span>
@@ -384,7 +723,7 @@ tbody tr:hover{background:var(--bg3)}
           <div id="mfResult" style="margin-top:14px"></div>
         </div>
         <div class="card">
-          <h3>历史数据库</h3>
+          <h3><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="6" rx="7.5" ry="3"/><path d="M4.5 6v12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V6"/><path d="M4.5 12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3"/></svg>历史数据库</h3>
           <p class="hint">来自 SQLite（dy_downloader.db）的作品下载历史。</p>
           <div class="grid g4">
             <label class="field" style="margin:0"><span>作者筛选</span><input type="text" id="arAuthor"></label>
@@ -398,24 +737,26 @@ tbody tr:hover{background:var(--bg3)}
         </div>
       </section>
 
-      <!-- 配置中心 -->
+      <!-- ==================== 配置中心 ==================== -->
       <section class="panel" id="panel-settings">
-        <div class="card">
+        <div class="page-intro"><h3>设置一次，之后省心</h3><p>修改后续任务的默认设置。本次下载范围也可在新建下载时单独调整。</p></div>
+        <div class="card settings-actions">
           <div class="row">
             <div>
               <h3 style="margin:0">配置文件</h3>
               <p class="hint" style="margin:4px 0 0">修改会同时作用于当前进程并写回 config.yml（凭据字段不可通过网页修改）。</p>
             </div>
             <span class="spacer" style="flex:1"></span>
-            <button class="btn ghost mini" id="cfgReload">重新读取</button>
+            <button class="ghost mini btn" id="cfgReload">重新读取</button>
             <button class="btn" id="cfgSave">保存配置</button>
+            <span id="cfgState" style="color:var(--muted);font-size:12px" role="status">正在读取配置</span>
           </div>
           <div id="cfgPath" class="kv" style="margin-top:12px"></div>
         </div>
         <div id="cfgForm"></div>
       </section>
 
-      <!-- 关于 -->
+      <!-- ==================== 关于 ==================== -->
       <section class="panel" id="panel-about">
         <div class="card">
           <h3>这个控制台能做什么</h3>
@@ -448,29 +789,77 @@ python -m tools.cookie_fetcher --config config.yml   # 交互式抓取 Cookie</d
         </div>
       </section>
 
+    </main>
+  </div>
+</div>
+
+<!-- 连接设置弹层：API 地址从顶栏移到这里，避免干扰普通用户 -->
+<div class="modal-mask" id="connModal" role="dialog" aria-modal="true" aria-labelledby="connModalTitle">
+  <div class="modal">
+    <h3 id="connModalTitle">连接设置</h3>
+    <p class="m-hint">本页面默认连接<b>同源服务</b>（和页面同一个地址端口），保持为空即可。只有把页面和后端分开部署时才需要填写后端 API 地址。远程访问若返回 401，会提示输入访问令牌（服务端 auth_token）。</p>
+    <label class="field" style="margin:0"><span>API 地址（例如 http://192.168.1.5:8000，留空 = 同源）</span>
+      <input type="text" id="apiBase" placeholder="默认同源"></label>
+    <label class="field"><span>远程访问令牌（本机使用可留空）</span><input type="password" id="apiToken" autocomplete="off" placeholder="只在当前浏览器会话保存"></label>
+    <p class="hint" id="connFeedback" role="status"></p>
+    <div class="m-row">
+      <button class="ghost btn" id="connModalClose">关闭</button>
+      <button class="btn" id="btnPing">测试连接</button>
     </div>
   </div>
 </div>
-<div class="toasts" id="toasts"></div>
+
+<!-- 目录选择弹层：浏览服务端本机目录，选中后回填到输入框 -->
+<div class="modal-mask" id="dirModal" role="dialog" aria-modal="true" aria-label="选择下载目录">
+  <div class="modal" style="max-width:620px">
+    <h3>选择目录</h3>
+    <p class="m-hint">单击选中、双击进入子目录；也可以直接在路径框粘贴绝对路径后点「转到」。</p>
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+      <input type="text" id="dirPathBox" style="flex:1;min-width:0" placeholder="输入或粘贴绝对路径">
+      <button class="ghost btn" id="dirGo">转到</button>
+      <button class="ghost btn" id="dirUp">⬆ 上一级</button>
+    </div>
+    <div id="dirList" class="dir-list"></div>
+    <div class="m-row" style="justify-content:space-between;align-items:center;gap:12px">
+      <span id="dirCur" style="font-size:12px;color:var(--muted);word-break:break-all;text-align:left"></span>
+      <span style="display:flex;gap:10px;flex:none">
+        <button class="ghost btn" id="dirModalClose">取消</button>
+        <button class="btn" id="dirPick">选择此目录</button>
+      </span>
+    </div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 
 <script>
 "use strict";
 
 /* ============================ 基础工具 ============================ */
 const LS_KEY = "dy_console_api_base";
+function storageGet(storage, key) { try { return storage.getItem(key); } catch (_) { return null; } }
+function storageSet(storage, key, value) { try { storage.setItem(key, value); } catch (_) {} }
 const state = {
-  base: localStorage.getItem(LS_KEY) || "",
+  base: storageGet(localStorage, LS_KEY) || "",
   config: null,
   configMeta: null,
   // 默认选中「主页发布作品」，与 config.yml 的 mode 默认值一致。
   // 这样作者主页批量下载的数量输入框一进页面就可见，不需要用户先猜。
   modes: ["post"],
-  numberValues: {},
+  numberValues: { post: 20 },
+  submitting: false,
+  jobs: [],
+  jobsLoading: false,
+  configDirty: false,
   downloadDirAbs: "",
+  downloadDirConfigured: "",
   settingsSchema: null,
   jobsTimer: null,
   archivePage: 1,
-  archiveTotalPages: 1
+  archiveTotalPages: 1,
+  chQualities: Object.create(null),
+  chExplicitQualities: Object.create(null),
+  chDefaultQuality: "highest"
 };
 
 const MODE_LABELS = {
@@ -486,11 +875,17 @@ const MODE_HINT = {
   collectmix: "仅当前登录账号可用"
 };
 const QUALITIES = [
-  ["original", "original · 原画（多一次探测请求）"],
-  ["highest", "highest · 最高转码档（默认）"],
+  ["highest", "最高可用画质（推荐）"],
+  ["original", "原画优先（抖音专用，其他平台取最高）"],
   ["1440p", "1440p"], ["1080p", "1080p"], ["720p", "720p"],
   ["540p", "540p"], ["480p", "480p"], ["360p", "360p"],
-  ["lowest", "lowest · 最低档（省流量）"]
+  ["lowest", "最低画质（节省流量）"]
+];
+const CHANNELS_QUALITIES = [
+  ["highest", "最高可用画质（推荐）"], ["original", "原始源（需要捕获原始地址）"],
+  ["2160p", "2160p"], ["1440p", "1440p"], ["1080p", "1080p"], ["720p", "720p"],
+  ["540p", "540p"], ["480p", "480p"], ["360p", "360p"],
+  ["lowest", "最低画质（节省流量）"]
 ];
 
 function apiUrl(path) {
@@ -498,32 +893,30 @@ function apiUrl(path) {
 }
 
 async function api(path, options) {
-  const opts = Object.assign({ headers: {} }, options || {});
+  const opts = Object.assign({}, options || {});
+  opts.headers = Object.assign({}, opts.headers || {});
   if (opts.body && typeof opts.body !== "string") {
     opts.headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(opts.body);
   }
   // 远程访问认证（server/auth.py）：环回地址无需 token；从非本机访问且
   // 服务端配置了 auth_token 时，携带 X-Auth-Token（存 sessionStorage）。
-  const authToken = sessionStorage.getItem("authToken");
+  const authToken = storageGet(sessionStorage, "authToken");
   if (authToken) opts.headers["X-Auth-Token"] = authToken;
   let resp;
+  const controller = new AbortController();
+  const timer = setTimeout(function () { controller.abort(); }, path.indexOf("/discovery/") >= 0 ? 120000 : 30000);
+  opts.signal = controller.signal;
   try {
     resp = await fetch(apiUrl(path), opts);
   } catch (err) {
-    throw new Error("无法连接服务：" + err.message);
+    throw new Error(err.name === "AbortError" ? "服务响应超时，请检查连接后重试" : "无法连接服务：" + err.message);
+  } finally {
+    clearTimeout(timer);
   }
   if (resp.status === 401 || resp.status === 403) {
-    const supplied = sessionStorage.getItem("authToken");
-    if (!supplied) {
-      const token = window.prompt(
-        "该服务要求远程访问令牌（服务端 server.auth_token 或环境变量 DOWNLOADER_API_TOKEN）。请输入："
-      );
-      if (token) {
-        sessionStorage.setItem("authToken", token);
-        return api(path, options);
-      }
-    }
+    document.getElementById("connFeedback").textContent = "访问被拒绝，请检查令牌。远程服务需先配置 server.auth_token。";
+    openConnModal();
   }
   const text = await resp.text();
   let data = null;
@@ -531,17 +924,26 @@ async function api(path, options) {
     try { data = JSON.parse(text); } catch (e) { data = { raw: text }; }
   }
   if (!resp.ok) {
-    const detail = data && (data.detail || data.message);
-    throw new Error(detail || ("HTTP " + resp.status));
+    throw new Error(apiErrorMessage(data, resp.status));
   }
   return data;
+}
+
+function apiErrorMessage(data, status) {
+  if (data && typeof data.message === "string") return data.message;
+  const detail = data && data.detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) return detail.map(function (e) { return (e.loc || []).filter(function (p) { return p !== "body"; }).join(" · ") + "：" + (e.msg || "参数不正确"); }).join("；");
+  return "请求失败（HTTP " + status + "），请检查连接和输入";
 }
 
 function toast(message, kind) {
   const box = document.getElementById("toasts");
   const el = document.createElement("div");
   el.className = "toast " + (kind || "");
-  el.textContent = message;
+  const ico = kind === "ok" ? "✓" : kind === "err" ? "✕" : kind === "warn" ? "!" : "ℹ";
+  el.innerHTML = '<span class="tico">' + ico + '</span><span></span>';
+  el.lastChild.textContent = message;
   box.appendChild(el);
   setTimeout(function () { el.remove(); }, 4200);
 }
@@ -577,24 +979,50 @@ function shortUrl(url) {
 }
 
 function urlTypeOf(url) {
-  const s = String(url || "");
-  // B 站链接先于抖音判定：域名不重叠，且 B 站也有 /video/ 路径。
-  if (/bilibili\.com|b23\.tv/i.test(s) || /^BV[0-9A-Za-z]{10}$/.test(s.trim())) {
-    if (/\/bangumi\/|\/cheese\//i.test(s)) return "B站·番剧/课程";
-    if (/space\.bilibili\.com\/\d+\/favlist|\/list\/ml/i.test(s)) return "B站·收藏夹";
-    if (/collectiondetail|seriesdetail|\/list\/\d+/i.test(s)) return "B站·合集/系列";
-    if (/space\.bilibili\.com/i.test(s)) return "B站·UP主";
-    if (/\/video\/|^BV/i.test(s)) return "B站·视频";
-    return "B站链接";
+  return linkInfo(url).label;
+}
+
+const OTHER_PLATFORMS = [
+  ["iqiyi", "爱奇艺", ["iqiyi.com", "iq.com"]], ["tencent", "腾讯视频", ["v.qq.com", "video.qq.com"]],
+  ["youku", "优酷", ["youku.com"]], ["mgtv", "芒果 TV", ["mgtv.com"]],
+  ["kuaishou", "快手", ["kuaishou.com", "gifshow.com", "chenzhongtech.com"]],
+  ["xigua", "西瓜视频", ["ixigua.com"]], ["toutiao", "今日头条", ["toutiao.com"]],
+  ["weibo", "微博", ["weibo.com", "weibo.cn"]], ["xiaohongshu", "小红书", ["xiaohongshu.com", "xhslink.com"]]
+];
+function hostMatches(host, suffix) { return host === suffix || host.endsWith("." + suffix); }
+function linkInfo(raw) {
+  const s = String(raw || "").trim();
+  if (/^BV[0-9A-Za-z]{10}$/.test(s) || /^av\d+$/i.test(s)) return { platform: "bilibili", type: "video", label: "B站 · 视频", supported: true };
+  let parsed;
+  try { parsed = new URL(s); } catch (_) { return { platform: "unknown", label: "无效链接", supported: false }; }
+  if (!/^https?:$/.test(parsed.protocol) || parsed.username || parsed.password) return { platform: "unknown", label: "无效链接", supported: false };
+  const host = parsed.hostname.toLowerCase(), path = parsed.pathname;
+  if (hostMatches(host, "bilibili.com") || hostMatches(host, "b23.tv") || hostMatches(host, "acg.tv")) {
+    if (/^\/(bangumi|cheese|festival)\//.test(path)) return { platform: "bilibili", label: "番剧 / 课程暂不支持", supported: false };
+    let type = "video", label = "视频";
+    if (/favlist|\/list\/ml/.test(path) || parsed.searchParams.has("fid")) { type = "favlist"; label = "收藏夹"; }
+    else if (/seriesdetail/.test(path)) { type = "series"; label = "系列"; }
+    else if (/collectiondetail|\/list\/\d+/.test(path)) { type = "collection"; label = "合集 / 系列"; }
+    else if (host === "space.bilibili.com") { type = "user"; label = "UP 主投稿"; }
+    return { platform: "bilibili", type: type, label: "B站 · " + label, supported: true, batch: type !== "video" };
   }
-  const pairs = [
-    [/\/video\//, "视频"], [/\/note\/|\/gallery\//, "图文"],
-    [/\/collection\/|\/mix\//, "合集"], [/\/music\//, "音乐"],
-    [/\/user\/self/, "我的收藏"], [/\/user\//, "作者主页"],
-    [/live\.douyin\.com|follow\/live/, "直播"], [/\/vsdetail\//, "直播回放"]
-  ];
-  for (let i = 0; i < pairs.length; i++) if (pairs[i][0].test(s)) return pairs[i][1];
-  return "链接";
+  if (hostMatches(host, "weixin.qq.com")) return { platform: "channels", label: "微信视频号", supported: false, message: "请使用「视频号」专用入口" };
+  for (const spec of OTHER_PLATFORMS) {
+    if (spec[2].some(function (h) { return hostMatches(host, h); })) return { platform: "ytdlp", key: spec[0], type: "video", label: spec[1], supported: true, batch: true };
+  }
+  if (["douyin.com", "iesdouyin.com", "webcast.amemv.com"].some(function (h) { return hostMatches(host, h); })) {
+    let type = "short", label = "抖音 · 短链";
+    if (parsed.searchParams.has("modal_id") || /\/video\//.test(path)) { type = "video"; label = "抖音 · 视频"; }
+    else if (/\/note\/|\/gallery\//.test(path)) { type = "gallery"; label = "抖音 · 图文"; }
+    else if (/\/user\/self(?:\/|$)/.test(path)) { type = "self"; label = "抖音 · 我的收藏"; }
+    else if (/\/user\//.test(path)) { type = "user"; label = "抖音 · 作者主页"; }
+    else if (/\/collection\/|\/mix\//.test(path)) { type = "mix"; label = "抖音 · 合集"; }
+    else if (/\/music\//.test(path)) { type = "music"; label = "抖音 · 音乐"; }
+    else if (/\/vsdetail\//.test(path)) { type = "live_replay"; label = "抖音 · 直播回放"; }
+    else if (host === "live.douyin.com" || /follow\/live/.test(path)) { type = "live"; label = "抖音 · 直播"; }
+    return { platform: "douyin", type: type, label: label, supported: true, batch: ["user", "self", "mix", "music", "short"].includes(type) };
+  }
+  return { platform: "unknown", label: "暂不支持的平台", supported: false };
 }
 
 function getPath(obj, path) {
@@ -631,9 +1059,18 @@ document.getElementById("nav").addEventListener("click", function (evt) {
   activateTab(btn.dataset.tab);
 });
 
+// 空状态 / 引导按钮上统一的页跳转入口（data-goto="页签名"）。
+document.addEventListener("click", function (evt) {
+  const go = evt.target.closest("[data-goto]");
+  if (go) activateTab(go.dataset.goto);
+});
+
 function activateTab(tab) {
+  if (!PAGE_META[tab]) return;
+  state.activeTab = tab;
   document.querySelectorAll("#nav button").forEach(function (b) {
     b.classList.toggle("active", b.dataset.tab === tab);
+    if (b.dataset.tab === tab) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
   });
   document.querySelectorAll(".panel").forEach(function (p) {
     p.classList.toggle("active", p.id === "panel-" + tab);
@@ -641,11 +1078,12 @@ function activateTab(tab) {
   const meta = PAGE_META[tab] || ["", ""];
   document.getElementById("pageTitle").textContent = meta[0];
   document.getElementById("pageSub").textContent = meta[1];
+  document.title = meta[0] + " · 视频下载工作台";
 
   if (state.jobsTimer) { clearInterval(state.jobsTimer); state.jobsTimer = null; }
   if (state.chTimer) { clearInterval(state.chTimer); state.chTimer = null; }
   if (tab === "jobs") { loadJobs(); startJobPolling(); }
-  if (tab === "channels") { loadChannelsAll(); state.chTimer = setInterval(loadChannelsAll, 2000); }
+  if (tab === "channels") { loadChannelsAll(); state.chTimer = setInterval(function () { if (!document.hidden) loadChannelsAll(); }, 2000); }
   if (tab === "overview") loadStats();
   if (tab === "settings" && !state.config) loadConfig();
 }
@@ -657,6 +1095,9 @@ const connText = document.getElementById("connText");
 function setConn(ok, text) {
   connDot.className = "dot " + (ok ? "on" : "off");
   connText.textContent = text;
+  // 窄屏隐藏侧边栏底部，因此顶栏始终保留连接入口。
+  document.getElementById("btnConnSettings2").style.display = "";
+  document.getElementById("connBanner").classList.toggle("show", !ok);
 }
 
 async function ping() {
@@ -672,50 +1113,91 @@ async function ping() {
   }
 }
 
+/* 连接设置弹层（API 地址从旧版顶栏输入框迁移至此） */
+const connModal = document.getElementById("connModal");
+function openConnModal() { showModal(connModal, "apiBase"); }
+function closeConnModal() { hideModal(connModal); }
+document.getElementById("btnConnSettings").addEventListener("click", openConnModal);
+document.getElementById("btnConnSettings").addEventListener("keydown", function (evt) { if (evt.key === "Enter" || evt.key === " ") { evt.preventDefault(); openConnModal(); } });
+document.getElementById("btnConnSettings2").addEventListener("click", openConnModal);
+document.getElementById("connModalClose").addEventListener("click", closeConnModal);
+connModal.addEventListener("click", function (evt) { if (evt.target === connModal) closeConnModal(); });
+document.addEventListener("keydown", function (evt) { if (evt.key === "Escape") closeConnModal(); });
+document.getElementById("connRetry").addEventListener("click", ping);
+
 document.getElementById("apiBase").value = state.base;
-document.getElementById("apiBase").addEventListener("change", function (e) {
-  state.base = e.target.value.trim().replace(/\/+$/, "");
-  localStorage.setItem(LS_KEY, state.base);
-  ping();
+document.getElementById("apiToken").value = storageGet(sessionStorage, "authToken") || "";
+document.getElementById("btnPing").addEventListener("click", async function () {
+  const base = document.getElementById("apiBase").value.trim().replace(/\/+$/, "");
+  if (base) {
+    try { const u = new URL(base); if (!/^https?:$/.test(u.protocol) || u.username || u.password || u.pathname !== "/" || u.search || u.hash) throw new Error(); }
+    catch (_) { document.getElementById("connFeedback").textContent = "请填写完整的 HTTP / HTTPS 服务地址，不包含路径或账号密码。"; return; }
+  }
+  state.base = base; storageSet(localStorage, LS_KEY, base);
+  storageSet(sessionStorage, "authToken", document.getElementById("apiToken").value.trim());
+  this.disabled = true;
+  document.getElementById("connFeedback").textContent = "正在测试连接…";
+  const ok = await ping();
+  document.getElementById("connFeedback").textContent = ok ? "服务已连接，关闭此窗口即可继续。" : "连接失败，请检查服务地址和令牌。";
+  this.disabled = false;
 });
-document.getElementById("btnPing").addEventListener("click", ping);
+
+/* 总览页快速开始 */
+document.getElementById("heroStart").addEventListener("click", function () { activateTab("download"); document.getElementById("dlLinks").focus(); });
+document.getElementById("heroArchive").addEventListener("click", function () { activateTab("archive"); });
 
 /* ============================ 总览 ============================ */
+// 侧边栏「任务中心」徽章：有进行中任务时显示数量，提醒用户去看进度。
+function updateJobsBadge(pending, running) {
+  const badge = document.getElementById("navJobsBadge");
+  const n = (pending || 0) + (running || 0);
+  badge.textContent = n;
+  badge.style.display = n > 0 ? "" : "none";
+}
+
 async function loadStats() {
   document.getElementById("brandSub").textContent = "正在读取服务状态…";
   try {
     const s = await api("/api/v1/stats");
+    setConn(true, "已连接");
     document.getElementById("brandSub").textContent = "v" + s.version + " · 服务运行中";
     document.getElementById("verText").textContent = "v" + s.version;
 
     document.getElementById("sHealth").textContent = "正常";
     document.getElementById("sHealth").className = "v ok";
-    document.getElementById("sCookie").textContent = s.cookies.valid ? "有效" : (s.cookies.configured ? "待校验" : "未配置");
+    document.getElementById("sCookie").textContent = s.cookies.valid ? "已配置" : (s.cookies.configured ? "需要补充" : "未配置");
     document.getElementById("sCookie").className = "v " + (s.cookies.valid ? "ok" : (s.cookies.configured ? "warn" : "err"));
     document.getElementById("sJobs").textContent = fmtNum(s.jobs.total);
     document.getElementById("sJobs").className = "v";
     document.getElementById("sArchive").textContent = s.archive.enabled ? fmtNum(s.archive.total) : "未启用";
     document.getElementById("sArchive").className = "v " + (s.archive.enabled ? "" : "warn");
 
+    updateJobsBadge(s.jobs.pending, s.jobs.running);
+
     state.downloadDirAbs = s.download_dir_abs || "";
+    state.downloadDirConfigured = s.download_dir || "";
     document.getElementById("ovDirPath").textContent = state.downloadDirAbs || "—";
+    document.getElementById("dlSavePath").textContent = "保存到：" + (state.downloadDirAbs || s.download_dir || "默认下载目录");
+    document.getElementById("ovSetup").innerHTML = "✓ 服务已就绪 · 保存位置已确认" +
+      (s.cookies.valid ? " · 抖音登录信息已配置" : ' · 抖音需有效登录信息；B 站与其他平台按各自账号权限下载。<button class="ghost mini btn" data-goto="about">查看登录说明</button>') +
+      ' <button class="ghost mini btn" data-goto="settings">更改保存位置</button>';
 
     const rt = s.runtime;
     document.getElementById("ovRuntime").innerHTML = [
       kv("下载目录", s.download_dir),
-      kv("并发线程", rt.thread),
+      kv("同时下载任务数", rt.thread),
       kv("限速（请求/秒）", rt.rate_limit),
       kv("失败重试", rt.retry_times),
       kv("下载画质", rt.video_quality),
-      kv("默认模式", (rt.mode || []).join(", ") || "—"),
+      kv("默认范围", (rt.mode || []).map(function (m) { return MODE_LABELS[m] || m; }).join("、") || "—"),
       kv("代理", rt.proxy ? "已配置" : "未配置")
     ].join("");
 
     document.getElementById("ovJobs").innerHTML = [
-      kv("待处理 pending", s.jobs.pending),
-      kv("进行中 running", s.jobs.running),
-      kv("成功 success", s.jobs.success),
-      kv("失败 failed", s.jobs.failed)
+      kv("排队等待", s.jobs.pending),
+      kv("正在下载", s.jobs.running),
+      kv("已完成", s.jobs.success),
+      kv("下载失败", s.jobs.failed)
     ].join("");
 
     document.getElementById("ovServer").innerHTML = [
@@ -753,8 +1235,8 @@ function renderModeChips() {
   box.innerHTML = Object.keys(MODE_LABELS).map(function (m) {
     const on = state.modes.indexOf(m) >= 0;
     const title = MODE_HINT[m] ? " title=" + JSON.stringify(MODE_LABELS[m] + "（" + MODE_HINT[m] + "）") : "";
-    return '<div class="chip' + (on ? " on" : "") + '" data-mode="' + m + '"' + title + ">" +
-      esc(MODE_LABELS[m]) + "</div>";
+    return '<button type="button" class="chip' + (on ? " on" : "") + '" aria-pressed="' + on + '" data-mode="' + m + '"' + title + ">" +
+      esc(MODE_LABELS[m]) + "</button>";
   }).join("");
 }
 
@@ -766,14 +1248,14 @@ function renderModeNumbers() {
     return;
   }
   box.innerHTML = state.modes.map(function (m) {
-    const val = state.numberValues[m] === undefined ? 0 : state.numberValues[m];
+    const val = state.numberValues[m] === undefined ? 20 : state.numberValues[m];
     return '<label class="field" style="margin:0"><span>' + esc(MODE_LABELS[m]) +
-      ' · 数量（0 = 全量下载）</span><input type="number" min="0" data-num="' + m + '" value="' + val + '"></label>';
+      ' · 最多条数（0 = 全部）</span><input type="number" min="0" step="1" data-num="' + m + '" value="' + val + '"></label>';
   }).join("");
   document.getElementById("dlQuick").innerHTML =
     '<span style="font-size:12px;color:var(--dim)">快捷设置数量：</span>' +
     [[0, "全量"], [20, "最近 20 条"], [50, "最近 50 条"], [100, "最近 100 条"]].map(function (q) {
-      return '<button class="btn ghost mini" data-quick="' + q[0] + '">' + q[1] + "</button>";
+      return '<button class="ghost mini btn" data-quick="' + q[0] + '">' + q[1] + "</button>";
     }).join("");
 }
 
@@ -817,7 +1299,10 @@ document.getElementById("dlModes").addEventListener("click", function (evt) {
   if (!chip) return;
   const m = chip.dataset.mode;
   const idx = state.modes.indexOf(m);
-  if (idx >= 0) state.modes.splice(idx, 1); else state.modes.push(m);
+  // 收藏与公开主页使用不同接口，点击另一组时直接切换，避免构造无效组合。
+  const isCollect = function (v) { return v === "collect" || v === "collectmix"; };
+  if (idx < 0) state.modes = state.modes.filter(function (v) { return isCollect(v) === isCollect(m); });
+  if (idx >= 0) state.modes.splice(idx, 1); else { state.modes.push(m); if (state.numberValues[m] === undefined) state.numberValues[m] = 20; }
   renderModeChips();
   renderModeNumbers();
   validateModes();
@@ -828,8 +1313,8 @@ document.getElementById("dlModes").addEventListener("click", function (evt) {
 document.getElementById("dlNumbers").addEventListener("input", function (evt) {
   const el = evt.target.closest("input[data-num]");
   if (!el) return;
-  const v = Number(el.value);
-  state.numberValues[el.dataset.num] = isNaN(v) ? 0 : Math.max(0, Math.floor(v));
+  state.numberValues[el.dataset.num] = Number(el.value);
+  updateDownloadSummary();
 });
 
 function validateModes() {
@@ -837,11 +1322,9 @@ function validateModes() {
   const others = state.modes.filter(function (m) { return m !== "collect" && m !== "collectmix"; });
   const box = document.getElementById("dlNotice");
   if (exclusive.length && others.length) {
-    box.textContent = "注意：collect / collectmix 必须单独使用，不能与 post / like / mix / music 混用，否则后端会拒绝。";
+    box.textContent = "收藏内容需要单独下载，请选择收藏或主页内容中的一组。";
   } else if (exclusive.length) {
-    box.textContent = "提示：收藏夹模式只对当前登录账号生效，链接需为 douyin.com/user/self?showTab=favorite_collection。";
-  } else if (state.modes.length) {
-    box.textContent = "";
+    box.textContent = "我的收藏仅对当前登录账号生效，需要该账号的抖音登录信息。";
   } else {
     box.textContent = "";
   }
@@ -852,85 +1335,102 @@ document.getElementById("dlLinks").addEventListener("input", detectLinks);
 // 抖音「复制链接」给的其实是整条分享文案，例如：
 //   长按复制此条消息，打开抖音搜索，查看TA的更多作品。 https://v.douyin.com/xxxx/
 // 所以不能把整行当 URL 用，必须先把链接抠出来。
-const URL_IN_TEXT = /https?:\/\/[^\s<>"'）)】\]，。、；！？]+/i;
-const BARE_DOUYIN = /(?:v\.|www\.|live\.)?(?:douyin|iesdouyin)\.com\/[^\s<>"'）)】\]，。、；！？]*|webcast\.amemv\.com\/[^\s<>"'）)】\]，。、；！？]*/i;
-// B 站裸域名（space.bilibili.com/... 、b23.tv/... 等）与裸 BV 号。
-const BARE_BILI = /(?:www\.|space\.|m\.)?bilibili\.com\/[^\s<>"'）)】\]，。、；！？]*|b23\.tv\/[^\s<>"'）)】\]，。、；！？]*/i;
-const BARE_BVID = /(^|[^0-9A-Za-z])(BV[0-9A-Za-z]{10})(?![0-9A-Za-z])/;
 
-function stripTrailingJunk(s) {
-  return String(s).replace(/[.,;:!?)\]}>）】、，。；：！？]+$/, "");
-}
-
-function extractUrl(line) {
-  const text = String(line || "").trim();
-  if (!text) return "";
-  const full = text.match(URL_IN_TEXT);
-  if (full) return stripTrailingJunk(full[0]);
-  const bare = text.match(BARE_DOUYIN);
-  if (bare) return "https://" + stripTrailingJunk(bare[0]);
-  const bareBili = text.match(BARE_BILI);
-  if (bareBili) return "https://" + stripTrailingJunk(bareBili[0]);
-  const bareBvid = text.match(BARE_BVID);
-  if (bareBvid) return bareBvid[2];
-  return "";
-}
-
-// 每一行返回 { raw, url, cleaned }：url 为空表示这行没识别出链接。
+// 单次扫描所有链接，完整 URL 优先，避免把查询参数或域名子串重复提取。
+const LINK_TOKENS = /https?:\/\/[^\s<>"'）)】\]，。、；！？]+|(?<![0-9A-Za-z._\/-])(?:[a-z0-9-]+\.)*(?:douyin\.com|iesdouyin\.com|webcast\.amemv\.com|bilibili\.com|b23\.tv|iqiyi\.com|iq\.com|v\.qq\.com|video\.qq\.com|youku\.com|mgtv\.com|kuaishou\.com|gifshow\.com|chenzhongtech\.com|ixigua\.com|toutiao\.com|weibo\.com|weibo\.cn|xiaohongshu\.com|xhslink\.com|weixin\.qq\.com)\/[^\s<>"'）)】\]，。、；！？]*|(?<![0-9A-Za-z])BV[0-9A-Za-z]{10}(?![0-9A-Za-z])/gi;
+function stripTrailingJunk(s) { return String(s).replace(/[.,;:!?)\]}>）】、，。；：！？]+$/, ""); }
 function parseLinks(text) {
-  return String(text || "").split(/\s*\n\s*/)
-    .map(function (s) { return s.trim(); })
-    .filter(function (s) { return s.length > 0 && !s.startsWith("#"); })
-    .map(function (raw) {
-      const url = extractUrl(raw);
-      return { raw: raw, url: url, cleaned: !!url && url !== raw };
+  const seen = new Set(), items = [];
+  String(text || "").split(/\r?\n/).forEach(function (line) {
+    const raw = line.trim();
+    if (!raw || raw.startsWith("#")) return;
+    const matches = raw.match(LINK_TOKENS) || [];
+    if (!matches.length && /^av\d+$/i.test(raw)) matches.push(raw);
+    if (!matches.length) { items.push({ raw: raw, url: "", cleaned: false }); return; }
+    matches.forEach(function (match) {
+      let url = stripTrailingJunk(match);
+      if (!/^https?:\/\//i.test(url) && !/^BV/i.test(url) && !/^av\d+$/i.test(url)) url = "https://" + url;
+      // 规范化主机和协议但保留查询参数、路径和签名的顺序。
+      if (!/^BV/.test(url) && !/^av\d+$/i.test(url)) { try { url = new URL(url).href; } catch (_) {} }
+      const duplicate = seen.has(url);
+      seen.add(url);
+      items.push({ raw: raw, url: url, cleaned: url !== raw, duplicate: duplicate, info: linkInfo(url) });
     });
+  });
+  return items;
 }
-
-function urlsOf(items) {
-  return items.filter(function (i) { return i.url; }).map(function (i) { return i.url; });
-}
-
+function extractUrl(line) { const first = parseLinks(line).find(function (i) { return i.url; }); return first ? first.url : ""; }
+function urlsOf(items) { return items.filter(function (i) { return i.url && !i.duplicate && i.info.supported; }).map(function (i) { return i.url; }); }
+function downloadItems() { return parseLinks(document.getElementById("dlLinks").value); }
 function detectLinks() {
-  const items = parseLinks(document.getElementById("dlLinks").value);
-  const urls = urlsOf(items);
-  const skipped = items.length - urls.length;
-  const cleaned = items.filter(function (i) { return i.cleaned; }).length;
-  document.getElementById("dlCount").textContent = "识别到 " + urls.length + " 条链接";
-
-  const box = document.getElementById("dlDetect");
-  if (!items.length) { box.innerHTML = ""; return; }
-
+  const items = downloadItems(), urls = urlsOf(items);
+  const unique = items.filter(function (i) { return i.url && !i.duplicate; });
+  const duplicateCount = items.filter(function (i) { return i.duplicate; }).length;
+  const unsupported = unique.filter(function (i) { return !i.info.supported; });
+  const infos = urls.map(linkInfo);
+  const author = infos.some(function (i) { return i.platform === "douyin" && ["user", "self", "short"].includes(i.type); });
+  const onlySelf = infos.length && infos.every(function (i) { return i.type === "self"; });
+  if (onlySelf && !state.modes.some(function (m) { return m === "collect" || m === "collectmix"; })) {
+    state.modes = ["collect"]; state.numberValues.collect = 20; renderModeChips(); renderModeNumbers();
+  }
+  const hasDouyin = !infos.length || infos.some(function (i) { return i.platform === "douyin"; });
+  const otherBatch = infos.some(function (i) { return i.batch && !(i.platform === "douyin" && ["user", "self", "short"].includes(i.type)); });
+  document.getElementById("dlDouyinScope").hidden = !author;
+  document.getElementById("dlBatchField").hidden = !otherBatch;
+  document.getElementById("dlDateScope").hidden = !infos.some(function (i) { return i.platform === "douyin" && i.batch; });
+  document.getElementById("dlDouyinExtras").hidden = !hasDouyin;
+  document.getElementById("dlExtraHint").textContent = hasDouyin ? "抖音附加内容按需开启。混合平台时，只作用于抖音任务。" : "其他平台采用各自的附加内容默认设置；画质和数量会应用到对应平台。";
+  document.getElementById("dlScopeHint").textContent = author ? "抖音主页 / 短链按下方所选范围执行；短链类型会在下载时进一步确认。" : otherBatch ? "批量内容先下载前 20 条；设为 0 可取全部。单条视频不受数量限制。" : "单条作品直接下载。实际画质取决于平台、登录状态和账号权限。";
   let html = "";
-  if (urls.length) {
-    const groups = {};
-    urls.forEach(function (u) { const t = urlTypeOf(u); groups[t] = (groups[t] || 0) + 1; });
-    const parts = Object.keys(groups).map(function (k) { return k + " × " + groups[k]; });
-    html += '<div class="code" style="white-space:normal">识别结果：' + esc(parts.join("　·　")) + "</div>";
+  if (items.length) {
+    html = '<div class="detect-summary"><span class="cnt">可提交 ' + urls.length + ' 条链接</span>' +
+      (duplicateCount ? '<span class="type-pill">已去重 ' + duplicateCount + ' 条</span>' : '') + '</div>';
+    html += unique.slice(0, 10).map(function (i) {
+      return '<div class="detect-row"><span class="type-pill">' + esc(i.info.label) + '</span><span class="link" title="' + esc(i.url) + '">' + esc(i.url) + '</span><span>' + (i.info.supported ? '✓' : '暂不提交') + '</span></div>';
+    }).join("");
+    if (unique.length > 10) html += '<div class="detect-note m">另有 ' + (unique.length - 10) + ' 条链接，均已识别。</div>';
+    if (unsupported.length) html += '<div class="detect-note w">' + unsupported.length + ' 条暂不支持的链接将跳过。' + (unsupported.some(function (i) { return i.info.platform === "channels"; }) ? '<button class="ghost mini btn" data-goto="channels">前往视频号入口</button>' : '请检查平台与内容类型。') + '</div>';
+    const ignored = items.filter(function (i) { return !i.url; }).length;
+    if (ignored) html += '<div class="detect-note m">已忽略 ' + ignored + ' 行没有链接的文字。</div>';
   }
-  if (cleaned) {
-    html += '<div style="margin-top:8px;font-size:12.5px;color:var(--info)">已从 ' + cleaned +
-      " 行分享文案中自动提取链接，多余文字已忽略。</div>";
-  }
-  if (skipped) {
-    html += '<div style="margin-top:8px;font-size:12.5px;color:var(--err)">有 ' + skipped +
-      " 行没识别出链接，已跳过。请确认粘贴的是抖音 / B 站链接。</div>";
-  }
-  if (!urls.length) { box.innerHTML = html; return; }
-
-  const authorCount = urls.filter(function (u) { return urlTypeOf(u) === "作者主页"; }).length;
-  if (authorCount) {
-    const chosen = state.modes.length
-      ? state.modes.map(function (m) { return MODE_LABELS[m]; }).join("、")
-      : "尚未选择（将按默认「主页发布作品」执行）";
-    html += '<div style="margin-top:8px;font-size:12.5px;color:var(--warn)">检测到 <b>' + authorCount +
-      "</b> 个作者主页链接 → 将按所选模式<b>批量下载</b>，当前范围：<b>" + esc(chosen) +
-      "</b>。可在下方「批量下载范围」调整。</div>";
-  } else {
-    html += '<div style="margin-top:8px;font-size:12.5px;color:var(--muted)">未检测到作者主页链接，下方「批量下载范围」不影响本次提交。</div>';
-  }
-  box.innerHTML = html;
+  document.getElementById("dlDetect").innerHTML = html;
+  validateModes();
+  updateDownloadSummary();
 }
+function submissionProblems() {
+  const infos = urlsOf(downloadItems()).map(linkInfo), problems = [];
+  const douyin = infos.filter(function (i) { return i.platform === "douyin"; });
+  const author = douyin.some(function (i) { return ["user", "self", "short"].includes(i.type); });
+  if (author && !state.modes.length) problems.push("请至少选择一种主页下载内容。");
+  const collectionMode = state.modes.some(function (m) { return m === "collect" || m === "collectmix"; });
+  if (author && collectionMode && state.modes.some(function (m) { return m !== "collect" && m !== "collectmix"; })) problems.push("收藏与其他主页范围需要分开下载。");
+  if (collectionMode && douyin.some(function (i) { return i.type === "user"; })) problems.push("我的收藏仅支持自己的收藏链接，请切换为主页发布作品。");
+  if (!collectionMode && douyin.some(function (i) { return i.type === "self"; })) problems.push("自己的收藏链接需要选择「我的收藏夹」或「我的收藏合集」。");
+  const start = document.getElementById("dlStart").value, end = document.getElementById("dlEnd").value;
+  if (douyin.length && start && end && start > end) problems.push("起始日期不能晚于结束日期。");
+  const inputs = [];
+  if (author) document.querySelectorAll("#dlNumbers input").forEach(function (el) { inputs.push(el); });
+  if (!document.getElementById("dlBatchField").hidden) inputs.push(document.getElementById("dlBatchLimit"));
+  if (douyin.length && document.getElementById("dlComments").checked) inputs.push(document.getElementById("dlCommentsMax"));
+  if (inputs.some(function (el) { return el.value === "" || !Number.isSafeInteger(Number(el.value)) || Number(el.value) < 0; })) problems.push("数量需要填写 0 或正整数；0 表示不限。");
+  return problems;
+}
+function updateDownloadSummary() {
+  const urls = urlsOf(downloadItems()), problems = submissionProblems();
+  const box = document.getElementById("dlValidation");
+  box.hidden = !problems.length; box.textContent = problems.join(" ");
+  const label = urls.length ? "准备提交 " + urls.length + " 个下载任务" : "先粘贴一个支持的链接";
+  document.getElementById("dlSummary").textContent = label;
+  const btn = document.getElementById("dlSubmit");
+  btn.disabled = state.submitting || !urls.length || !!problems.length;
+  if (!state.submitting) btn.textContent = urls.length ? "开始下载（" + urls.length + "）" : "开始下载";
+  document.getElementById("dlCommentsReplies").disabled = !document.getElementById("dlComments").checked;
+  document.getElementById("dlCommentsMax").disabled = !document.getElementById("dlComments").checked;
+}
+document.getElementById("panel-download").addEventListener("change", updateDownloadSummary);
+document.getElementById("dlBatchLimit").addEventListener("input", updateDownloadSummary);
+document.getElementById("dlCommentsMax").addEventListener("input", updateDownloadSummary);
+document.getElementById("dlDemoBili").addEventListener("click", function () { document.getElementById("dlLinks").value = "https://www.bilibili.com/video/BV1xx411c7mD"; detectLinks(); });
 
 document.getElementById("dlDemoAuthor").addEventListener("click", function () {
   document.getElementById("dlLinks").value =
@@ -946,83 +1446,65 @@ document.getElementById("dlClear").addEventListener("click", function () {
   detectLinks();
 });
 
-function buildOverrides() {
-  const content = {};
-  document.querySelectorAll("#dlContent input[data-content]").forEach(function (el) {
-    content[el.dataset.content] = el.checked;
-  });
-  const number = {};
-  state.modes.forEach(function (m) { number[m] = Number(state.numberValues[m] || 0); });
-  const mixVal = number.mix === undefined ? 0 : number.mix;
-  number.allmix = mixVal;
 
-  const overrides = {
-    mode: state.modes.length ? state.modes.slice() : ["post"],
-    number: number,
-    video_quality: document.getElementById("dlQuality").value,
-    start_time: document.getElementById("dlStart").value || "",
-    end_time: document.getElementById("dlEnd").value || "",
-    comments: {
-      enabled: document.getElementById("dlComments").checked,
-      include_replies: document.getElementById("dlCommentsReplies").checked,
-      max_comments: Number(document.getElementById("dlCommentsMax").value || 0)
-    },
+function buildOverrides(url) {
+  const info = linkInfo(url || urlsOf(downloadItems())[0] || "https://www.douyin.com/video/1");
+  const quality = document.getElementById("dlQuality").value;
+  const mappedQuality = quality === "original" ? "highest" : quality;
+  const limit = Number(document.getElementById("dlBatchLimit").value);
+  if (info.platform === "bilibili") return { bilibili: { quality: mappedQuality === "1440p" ? "1080p" : mappedQuality === "540p" ? "480p" : mappedQuality, number: { user: limit, collection: limit, series: limit, favlist: limit } } };
+  if (info.platform === "ytdlp") return { ytdlp: { quality: mappedQuality === "1440p" ? "2k" : mappedQuality, number: { video: limit } } };
+  const number = {};
+  state.modes.forEach(function (m) { number[m] = state.numberValues[m] === undefined ? 20 : Number(state.numberValues[m]); });
+  number.allmix = number.mix === undefined ? 20 : number.mix;
+  if (info.type === "mix" || info.type === "music") number[info.type] = limit;
+  const overrides = { number: number, video_quality: quality,
+    comments: { enabled: document.getElementById("dlComments").checked, include_replies: document.getElementById("dlCommentsReplies").checked, max_comments: Number(document.getElementById("dlCommentsMax").value) },
     transcript: { enabled: document.getElementById("dlTranscript").checked }
   };
-  Object.keys(content).forEach(function (k) { overrides[k] = content[k]; });
+  if (["user", "self", "short"].includes(info.type)) overrides.mode = state.modes.slice();
+  if (info.batch) { overrides.start_time = document.getElementById("dlStart").value || ""; overrides.end_time = document.getElementById("dlEnd").value || ""; }
+  document.querySelectorAll("#dlContent input[data-content]").forEach(function (el) { overrides[el.dataset.content] = el.checked; });
   return overrides;
 }
-
 document.getElementById("dlSubmit").addEventListener("click", async function () {
-  const urls = urlsOf(parseLinks(document.getElementById("dlLinks").value));
-  if (!urls.length) { toast("没有识别到链接。可直接粘贴 App 的分享文案，会自动提取其中的链接", "warn"); return; }
-  if (state.modes.length && state.modes.some(function (m) { return m === "collect" || m === "collectmix"; })) {
-    const others = state.modes.filter(function (m) { return m !== "collect" && m !== "collectmix"; });
-    if (others.length) { toast("collect / collectmix 不能与其他模式混用", "err"); return; }
-  }
-  const overrides = buildOverrides();
-  const btn = this;
-  btn.disabled = true;
-  btn.textContent = "提交中…";
+  if (state.submitting) return;
+  const urls = urlsOf(downloadItems()), problems = submissionProblems();
+  if (!urls.length || problems.length) { updateDownloadSummary(); return; }
+  // 提交前冻结本次参数；提交途中修改输入不会影响尚未入队的任务。
+  const payloads = urls.map(function (url) { return { url: url, overrides: buildOverrides(url) }; });
+  state.submitting = true; this.disabled = true;
   const results = [];
-  for (let i = 0; i < urls.length; i++) {
-    try {
-      const r = await api("/api/v1/download", { method: "POST", body: { url: urls[i], overrides: overrides } });
-      results.push({ url: urls[i], ok: true, job_id: r.job_id, status: r.status });
-    } catch (err) {
-      results.push({ url: urls[i], ok: false, error: err.message });
+  try {
+    for (let i = 0; i < payloads.length; i++) {
+      this.textContent = "提交中 " + (i + 1) + " / " + payloads.length;
+      try {
+        const r = await api("/api/v1/download", { method: "POST", body: payloads[i] });
+        results.push({ url: payloads[i].url, ok: true, job_id: r.job_id });
+      } catch (err) { results.push({ url: payloads[i].url, ok: false, error: err.message }); }
     }
-  }
-  btn.disabled = false;
-  btn.textContent = "提交下载任务";
+  } finally { state.submitting = false; updateDownloadSummary(); }
   const ok = results.filter(function (r) { return r.ok; }).length;
   toast("已提交 " + ok + " / " + results.length + " 个任务", ok === results.length ? "ok" : "warn");
-  document.getElementById("dlResult").innerHTML =
-    '<div class="card"><h3>提交结果</h3>' +
-    (ok ? '<p class="hint">任务已进入队列。下载是后台异步执行的，点右侧按钮或上方「任务中心」可以实时看进度、暂停或取消。</p>' +
-      '<div class="row" style="margin-bottom:12px"><button class="btn" id="dlGoJobs">查看下载进度</button></div>' : "") +
-    '<div class="tbl-wrap"><table><thead><tr><th style="width:80px">状态</th><th>链接</th><th style="width:150px">任务 ID</th></tr></thead><tbody>' +
-    results.map(function (r) {
-      return "<tr><td>" + (r.ok ? '<span class="badge b-pending">已入队</span>' : '<span class="badge b-failed">失败</span>') +
-        '</td><td class="mono">' + esc(shortUrl(r.url)) + "</td><td class=\"mono\">" +
-        (r.ok ? esc(r.job_id) : esc(r.error)) + "</td></tr>";
-    }).join("") + "</tbody></table></div></div>";
-  const goBtn = document.getElementById("dlGoJobs");
-  if (goBtn) goBtn.addEventListener("click", function () { activateTab("jobs"); });
-  // 有任务入队就直接切到任务中心——提交后停在原地看不见任何过程，
-  // 会被误认为"没开始下载"。
-  if (ok) setTimeout(function () { activateTab("jobs"); }, 400);
+  document.getElementById("dlResult").innerHTML = '<div class="card"><h3>提交结果</h3><p class="hint">' +
+    (ok ? "已入队的任务可在任务中心查看进度。" : "任务尚未入队，请按下方提示调整后重试。") + '</p>' +
+    results.map(function (r) { return '<div class="detect-row"><span>' + (r.ok ? "✓ 已入队" : "提交失败") + '</span><span class="link">' + esc(r.url) + '</span><span>' + esc(r.ok ? r.job_id : r.error) + '</span></div>'; }).join("") +
+    (ok ? '<button class="btn" style="margin-top:14px" data-goto="jobs">查看下载进度</button>' : '') + '</div>';
+  if (ok === results.length && ok) activateTab("jobs");
+  // 部分失败留在提交结果，避免失败原因被跳转藏起来。
 });
-
 document.getElementById("dlPreview").addEventListener("click", function () {
-  const payload = { mode: buildOverrides().mode, overrides: buildOverrides() };
-  document.getElementById("dlResult").innerHTML =
-    '<div class="card"><h3>提交参数预览</h3><div class="code">' + esc(JSON.stringify(payload, null, 2)) + "</div></div>";
+  const urls = urlsOf(downloadItems());
+  if (!urls.length) { toast("先粘贴支持的链接，再检查下载清单", "warn"); return; }
+  document.getElementById("dlResult").innerHTML = '<div class="card"><h3>本次下载清单</h3><p class="hint">保存到 ' + esc(state.downloadDirAbs || "默认下载目录") + ' · ' + urls.length + ' 个链接 · ' + esc(document.getElementById("dlQuality").selectedOptions[0].textContent) + '</p>' +
+    urls.map(function (u) { return '<div class="detect-row"><span class="type-pill">' + esc(urlTypeOf(u)) + '</span><span class="link">' + esc(u) + '</span></div>'; }).join("") +
+    '<details style="margin-top:12px"><summary>查看技术参数</summary><div class="code">' + esc(JSON.stringify(urls.map(function (u) { return { url: u, overrides: buildOverrides(u) }; }), null, 2)) + '</div></details></div>';
 });
 
 /* ============================ 任务中心 ============================ */
 function jobBadge(job) {
-  if (job.paused && job.status === "running") return '<span class="badge b-paused">已暂停</span>';
+  if (job.paused && ["pending", "running"].includes(job.status)) return '<span class="badge b-paused">已暂停</span>';
+  if (["success", "failed"].includes(job.status) && job.failed > 0 && job.success > 0) return '<span class="badge b-failed">部分失败</span>';
   const map = {
     pending: ["b-pending", "排队中"], running: ["b-running", "下载中"],
     success: ["b-success", "已完成"], failed: ["b-failed", "失败"],
@@ -1057,13 +1539,13 @@ function jobActions(job) {
   let html = "";
   if (active) {
     html += job.paused
-      ? '<button class="btn ghost mini" data-act="resume" data-id="' + id + '">继续</button>'
-      : '<button class="btn ghost mini" data-act="pause" data-id="' + id + '">暂停</button>';
-    html += '<button class="btn ghost mini" data-act="cancel" data-id="' + id + '">取消</button>';
-  } else {
-    html += '<button class="btn ghost mini" data-act="retry" data-id="' + id + '">重试</button>';
+      ? '<button class="ghost mini btn" data-act="resume" data-id="' + id + '">继续</button>'
+      : '<button class="ghost mini btn" data-act="pause" data-id="' + id + '">暂停</button>';
+    html += '<button class="ghost mini btn" data-act="cancel" data-id="' + id + '">取消</button>';
+  } else if (job.status !== "success" || job.failed > 0) {
+    html += '<button class="ghost mini btn" data-act="retry" data-id="' + id + '">重试</button>';
   }
-  html += '<button class="btn ghost mini" data-act="delete" data-id="' + id + '">删除</button>';
+  if (!active) html += '<button class="ghost mini btn" data-act="delete" data-id="' + id + '" title="移除记录，保留已下载文件">移除记录</button>';
   return html;
 }
 
@@ -1077,7 +1559,7 @@ function renderJob(job) {
 
   let line = "";
   if (job.current && job.current.bytes_total) {
-    line = "正在下载 " + job.current.aweme_id + " · " + fmtBytes(job.current.bytes_read) +
+    line = "正在下载 " + esc(job.current.aweme_id) + " · " + fmtBytes(job.current.bytes_read) +
       " / " + fmtBytes(job.current.bytes_total) +
       (job.current.percent === null || job.current.percent === undefined ? "" : "（" + job.current.percent + "%）");
   } else if (job.step || job.detail) {
@@ -1101,10 +1583,10 @@ function renderJob(job) {
   // 输出目录行带「打开文件夹 / 复制路径」。任务没跑到落盘（例如失败）时
   // output_dirs 为空，退化成下载根目录，用户依然点得动。
   const dirRow = function (dir, isRoot) {
-    return '<div class="sub" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+    return '<div class="dirline">' +
       "<span>" + (isRoot ? "下载根目录" : "输出目录") + " " + esc(dir) + "</span>" +
-      '<button class="btn ghost mini" data-open="' + esc(isRoot ? "" : dir) + '">打开文件夹</button>' +
-      '<button class="btn ghost mini" data-copy="' + esc(dir) + '">复制路径</button>' +
+      '<button class="ghost mini btn" data-open="' + esc(isRoot ? "" : dir) + '">打开文件夹</button>' +
+      '<button class="ghost mini btn" data-copy="' + esc(dir) + '">复制路径</button>' +
       "</div>";
   };
   const ownDirs = job.output_dirs || [];
@@ -1116,17 +1598,20 @@ function renderJob(job) {
 
   return '<div class="jobcard">' +
     '<div class="top">' + jobBadge(job) +
-    '<span style="font-size:12px;color:var(--muted)">' + esc(urlTypeOf(job.url)) + "</span>" +
+    '<span class="jtype">' + esc(urlTypeOf(job.url)) + "</span>" +
     '<span class="url" title="' + esc(job.url) + '">' + esc(job.url) + "</span>" +
     '<span class="acts">' + jobActions(job) + "</span></div>" +
     jobProgressBar(job) +
     (line ? '<div class="line">' + line + "</div>" : "") +
     '<div class="meta" style="margin-top:8px">' + meta.join("") + "</div>" +
-    err + '<div class="sub">' + sub + "</div>" + dirs +
+    err + '<div class="sub">' + sub + "</div>" +
+    (dirs ? '<div class="dirs">' + dirs + "</div>" : "") +
     "</div>";
 }
 
 async function loadJobs() {
+  if (state.jobsLoading) return;
+  state.jobsLoading = true;
   const box = document.getElementById("jobList");
   try {
     const data = await api("/api/v1/jobs");
@@ -1142,16 +1627,38 @@ async function loadJobs() {
     document.getElementById("jobSummary").textContent =
       "共 " + jobs.length + " 个 · 排队 " + counts.pending + " · 下载中 " + counts.running +
       " · 已完成 " + counts.success + " · 失败 " + counts.failed + " · 已取消 " + counts.cancelled;
-
-    if (!jobs.length) {
-      box.innerHTML = '<div class="empty">暂无任务。到「链接下载」提交一个链接试试。</div>';
-      return;
-    }
-    box.innerHTML = jobs.map(renderJob).join("");
+    updateJobsBadge(counts.pending, counts.running);
+    state.jobs = jobs;
+    renderFilteredJobs();
   } catch (err) {
-    box.innerHTML = '<div class="empty">读取任务失败：' + esc(err.message) + "</div>";
+    box.innerHTML = '<div class="empty" style="color:var(--err)">读取任务失败：' + esc(err.message) + "</div>";
+  } finally {
+    state.jobsLoading = false;
   }
 }
+
+function filterJobs(jobs, filter, query) {
+  const needle = String(query || "").trim().toLowerCase();
+  return jobs.filter(function (j) {
+    const active = j.status === "running" || j.status === "pending";
+    const matches = filter === "all" || (filter === "active" && active) ||
+      (filter === "paused" && active && j.paused) ||
+      (filter === "failed" && (j.status === "failed" || j.failed > 0)) ||
+      (filter === "success" && j.status === "success" && !j.failed) ||
+      (filter === "cancelled" && j.status === "cancelled");
+    return matches && (!needle || [j.url, j.author_nickname, j.last_item, j.detail, j.job_id].join(" ").toLowerCase().includes(needle));
+  });
+}
+function renderFilteredJobs() {
+  const jobs = filterJobs(state.jobs, document.getElementById("jobFilter").value, document.getElementById("jobSearch").value);
+  const box = document.getElementById("jobList");
+  if (!state.jobs.length) {
+    box.innerHTML = '<div class="empty"><span class="empty-ico">↓</span>还没有下载任务<br>粘贴一个链接，就能在这里看到进度。<br><button class="btn" style="margin-top:12px" data-goto="download">新建下载</button></div>';
+  } else if (!jobs.length) box.innerHTML = '<div class="empty">没有匹配的任务。试试其他状态或搜索词。</div>';
+  else box.innerHTML = jobs.map(renderJob).join("");
+}
+document.getElementById("jobFilter").addEventListener("change", renderFilteredJobs);
+document.getElementById("jobSearch").addEventListener("input", renderFilteredJobs);
 
 document.getElementById("jobList").addEventListener("click", async function (evt) {
   const openBtn = evt.target.closest("button[data-open]");
@@ -1200,7 +1707,7 @@ document.getElementById("jobAuto").addEventListener("change", function () { star
 function startJobPolling() {
   if (state.jobsTimer) { clearInterval(state.jobsTimer); state.jobsTimer = null; }
   if (!document.getElementById("jobAuto").checked) return;
-  state.jobsTimer = setInterval(loadJobs, 1500);
+  state.jobsTimer = setInterval(function () { if (!document.hidden && !document.querySelector("#jobList button:disabled")) loadJobs(); }, 1500);
 }
 
 /* ============================ 数据发现 ============================ */
@@ -1227,7 +1734,7 @@ function renderHot(data) {
     const word = it.word || it.sentence || it.title || JSON.stringify(it).slice(0, 60);
     const hot = it.hot_value !== undefined ? fmtNum(it.hot_value) : (it.hot_value_str || "—");
     return "<tr><td>" + (i + 1) + "</td><td>" + esc(word) +
-      '</td><td class="mono">' + esc(hot) + '</td><td><button class="btn ghost mini" data-search="' + esc(word) + '">搜同款</button></td></tr>';
+      '</td><td class="mono">' + esc(hot) + '</td><td><button class="ghost mini btn" data-search="' + esc(word) + '">搜同款</button></td></tr>';
   }).join("");
   return '<div class="kv"><span class="k">快照文件</span><span class="v">' + esc(data.path) + "</span></div>" +
     '<div class="tbl-wrap" style="margin-top:10px"><table><thead><tr><th style="width:50px">#</th><th>热词</th><th style="width:110px">热度</th><th style="width:90px">操作</th></tr></thead><tbody>' + rows + "</tbody></table></div>";
@@ -1269,7 +1776,7 @@ function renderSearch(data) {
     const link = "https://www.douyin.com/video/" + id;
     return '<tr><td><span class="ellip" title="' + esc(desc) + '">' + esc(desc || "（无标题）") + "</span></td>" +
       "<td>" + esc(author) + '</td><td class="mono">' + esc(id) + "</td>" +
-      '<td><button class="btn ghost mini" data-copy="' + esc(link) + '">复制链接</button></td></tr>';
+      '<td><button class="ghost mini btn" data-copy="' + esc(link) + '">复制链接</button></td></tr>';
   }).join("");
   return '<div class="kv"><span class="k">快照文件</span><span class="v">' + esc(data.path) + "</span></div>" +
     '<div class="kv"><span class="k">条数</span><span class="v">' + data.count + "</span></div>" +
@@ -1369,7 +1876,7 @@ async function loadChannelsStatus() {
     ? "嗅探运行中 · 端口 " + s.port + " · 已捕获 " + (s.feeds_total || 0) + " 条"
     : "未启动";
   document.getElementById("chStartBtn").disabled = s.running || !mitmOk || !s.enabled;
-  document.getElementById("chStartBtn").textContent = s.running ? "嗅探中…" : "启动嗅探";
+  document.getElementById("chStartBtn").textContent = s.running ? "捕获中…" : "启动捕获";
   document.getElementById("chStopBtn").disabled = !s.running;
   const autoBox = document.getElementById("chAutoDownload");
   autoBox.disabled = !s.running;
@@ -1384,9 +1891,9 @@ async function loadChannelsStatus() {
   } else if (!certOk) {
     hint.textContent = "首次使用需先「安装证书」——点击后服务器会弹出 Windows 确认框，请点「是」。证书仅在本机生成（~/.mitmproxy），用于解密本机微信视频流量。";
   } else if (!s.running) {
-    hint.textContent = "证书就绪。点击「启动嗅探」后，在本机微信里打开视频号，页面中会出现「下载」按钮。";
+    hint.textContent = "证书就绪。先点击「启动捕获」，再从微信菜单彻底退出并重新打开微信，然后进入视频号播放目标视频。";
   } else {
-    hint.textContent = "正在嗅探。在本机微信里打开视频号播放视频，点页面里的「下载」按钮即可保存；停止会话时系统代理自动还原。";
+    hint.textContent = "捕获运行中。先确认下方显示微信已连接，再从开头连续播放视频，完整加载后会校验并保存（或点页面「下载」）。若无捕获，请从微信菜单彻底退出并重新打开；停止会话后恢复原代理。";
   }
   if (s.stats) {
     document.getElementById("chStatsText").textContent =
@@ -1397,17 +1904,31 @@ async function loadChannelsStatus() {
   // 待处理的分享链接（链接下载模式引导）。
   const linkHint = document.getElementById("chLinkHint");
   if (s.link && s.link.share_id) {
-    linkHint.textContent = "等待分享链接 " + s.link.share_id + " 的视频：请在本机微信中打开该链接，捕获后自动下载。";
+    linkHint.textContent = "等待分享链接 " + s.link.share_id + " 的视频：在本机微信中打开该链接，页面会自动跳转到网页版详情页，从开头连续播放并等待完整加载后自动保存；提前退出只能取得部分内容，不会登记为成功。";
   }
   chRenderDiagnostics(s);
 }
 
 /** 渲染嗅探链路诊断状态链（替代笼统的「暂无嗅探结果」）。 */
+function chConnectionText(s) {
+  if (!s.running) return "";
+  const c = s.wechat_connection || {};
+  if (!c.supported) return "";
+  if (c.connection_proxy_matches === false) return "Windows 连接代理尚未同步到捕获端口，请停止后重新启动捕获。";
+  if (c.wechat_running === false) return "未检测到电脑微信，请打开微信并进入视频号。";
+  if (c.proxy_connected === true) return "✓ 微信已连接捕获代理。";
+  if (c.proxy_connected === false && (c.other_proxy_ports || []).length) return "微信正在连接其他本机端口（" + c.other_proxy_ports.join("、") + "），尚未连接捕获代理。";
+  if (s.diagnostics && (s.diagnostics.counters || {}).target_domain_connections > 0) return "已收到视频号流量，请保持目标视频播放。";
+  if (c.proxy_connected === false) return "尚未检测到微信连接捕获代理，请重新打开视频号并播放。";
+  return "正在检查微信连接…";
+}
+
 function chRenderDiagnostics(s) {
   const d = s.diagnostics;
   const chainBox = document.getElementById("chChain");
   const adviceBox = document.getElementById("chAdvice");
   const stageText = document.getElementById("chStageText");
+  document.getElementById("chWechatText").textContent = chConnectionText(s);
   if (!d) {
     chainBox.innerHTML = "";
     adviceBox.textContent = "";
@@ -1436,64 +1957,161 @@ function chRenderDiagnostics(s) {
 
 async function loadChannelsFeeds() {
   let d;
-  try { d = await api("/api/v1/channels/feeds?limit=100"); } catch (err) { return; }
+  try { d = await api("/api/v1/channels/feeds?limit=2000"); } catch (err) { return; }
   const box = document.getElementById("chFeeds");
   if (!d || !d.running) {
     box.innerHTML = '<div class="empty">未启动嗅探。</div>';
     document.getElementById("chFeedCount").textContent = "";
     return;
   }
-  document.getElementById("chFeedCount").textContent = "共 " + (d.total || 0) + " 条";
-  const feeds = d.feeds || [];
+  const priority = function (feed) {
+    return feed.status === "downloading" ? 0 : feed.downloaded_paths && feed.downloaded_paths.length ? 1 : 2;
+  };
+  const feeds = (d.feeds || []).filter(function (feed, index) { return index < 100 || priority(feed) < 2; })
+    .sort(function (a, b) { return priority(a) - priority(b); });
+  document.getElementById("chFeedCount").textContent = "共 " + (d.total || 0) + " 条" +
+    (feeds.length < d.total ? " · 显示 " + feeds.length + " 条（含已保存与下载中）" : "");
   if (!feeds.length) {
     // 用链路诊断给出可操作的提示，而不是笼统的「暂无嗅探结果」。
     const diag = window.__chLastDiagnostics;
     const advice = diag && diag.message ? diag.message : "";
     box.innerHTML = '<div class="empty">' + esc(
-      "嗅探运行中，尚未捕获内容。请在本机微信里打开视频号并播放视频 1–2 秒。" +
+      "嗅探运行中，尚未捕获内容。请在本机微信里从头播放视频并等待完整加载。" +
       (advice ? "\n链路诊断：" + advice : "")
     ) + "</div>";
     return;
   }
-  box.innerHTML = feeds.map(function (f) {
+  state.chDefaultQuality = d.default_quality || "highest";
+  if (!state.downloadDirAbs || !state.downloadDirConfigured) {
+    try {
+      const directory = await api("/api/v1/download-dir");
+      state.downloadDirAbs = directory.download_dir;
+      state.downloadDirConfigured = directory.configured;
+    } catch (err) { /* Still show returned locations if the directory API is unavailable. */ }
+  }
+  box.innerHTML = feeds.map(function (f) { return chRenderFeed(f, state.chDefaultQuality); }).join("");
+}
+
+function chAbsoluteFilePath(path) {
+  if (/^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(path) || !state.downloadDirAbs) return path;
+  const normalize = function (value) { return String(value || "").replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, ""); };
+  let relative = normalize(path), configured = normalize(state.downloadDirConfigured);
+  const windows = /^(?:[A-Za-z]:|\\\\)/.test(state.downloadDirAbs);
+  const compare = function (value) { return windows ? value.toLowerCase() : value; };
+  if (configured && compare(relative).indexOf(compare(configured) + "/") === 0) relative = relative.slice(configured.length + 1);
+  const separator = windows ? "\\" : "/";
+  return state.downloadDirAbs.replace(/[\\/]+$/, "") + separator + relative.replace(/\//g, separator);
+}
+
+function chQualityOptions(feed) {
+  const result = [], seen = Object.create(null);
+  const add = function (option) {
+    if (!option || typeof option.value !== "string" || seen[option.value]) return;
+    if (!/^(?:highest|lowest|original|format:[A-Za-z0-9_.-]{1,128})$/.test(option.value)) return;
+    if (option.value === "original" && !feed.has_original) return;
+    seen[option.value] = true;
+    const width = Number(option.width) || 0, height = Number(option.height) || 0;
+    const label = String(option.label || option.value), resolution = /^(\d{3,4})p/.exec(label);
+    result.push({ value: option.value, label: label, width: width, height: height,
+      resolution: width && height ? Math.min(width, height) : resolution ? Number(resolution[1]) : 0 });
+  };
+  (Array.isArray(feed.quality_options) ? feed.quality_options : []).forEach(add);
+  if (!seen.highest) result.unshift({ value: "highest", label: result.length ? "最高可用画质" : "当前源（未捕获其他档位）" });
+  if (feed.has_original && !seen.original) add({ value: "original", label: "原始源" });
+  return result;
+}
+
+function chSelectedQuality(feed, options, defaultQuality) {
+  const saved = state.chQualities[feed.feed_id];
+  if (state.chExplicitQualities[feed.feed_id] && options.some(function (option) { return option.value === saved; })) return saved;
+  if (options.some(function (option) { return option.value === defaultQuality; })) return defaultQuality;
+  const target = /^(\d+)p$/.exec(defaultQuality || "");
+  const formats = options.filter(function (option) { return option.value.indexOf("format:") === 0 && option.resolution; });
+  if (target && formats.length) {
+    const goal = Number(target[1]);
+    const best = formats.reduce(function (chosen, option) {
+      return Math.abs(option.resolution - goal) < Math.abs(chosen.resolution - goal) ? option : chosen;
+    }, formats[0]);
+    return best.value;
+  }
+  return "highest";
+}
+
+function chRenderFeed(f, defaultQuality) {
     const kind = CH_KIND[f.kind] || f.kind;
     const meta = [
       f.author_name || "未知作者",
       chFmtTime(f.create_time),
       kind,
       f.duration ? chFmtDur(f.duration) : "",
-      f.file_size ? chFmtSize(f.file_size) : ""
+      f.file_size ? chFmtSize(f.file_size) : "",
+      f.downloaded_quality && f.downloaded_quality.width && f.downloaded_quality.height
+        ? "已下载 " + f.downloaded_quality.width + "×" + f.downloaded_quality.height : ""
     ].filter(Boolean).join(" · ");
-    const statusColor = { done: "var(--ok, #3aa675)", failed: "var(--err, #d26)", downloading: "#d59f18" }[f.status] || "var(--muted)";
-    const badge = '<span style="font-size:11px;color:' + statusColor + '">' +
+    const statusColor = { done: "var(--ok)", failed: "var(--err)", downloading: "var(--warn)" }[f.status] || "var(--muted)";
+    const badge = '<span class="st" style="color:' + statusColor + '">' +
       (CH_STATUS[f.status] || f.status) + (f.status === "skipped" && f.kind === "live" ? "（直播）" : "") + "</span>";
     let action = "";
-    if (f.status !== "downloading" && f.status !== "done") {
-      action = '<button class="btn mini" onclick="chDownload(\'' + esc(f.feed_id) + '\')">' +
-        (f.kind === "live" ? "录制" : "下载") + "</button>";
-    } else if (f.status === "done" && f.downloaded_paths && f.downloaded_paths.length) {
-      action = '<span style="font-size:11px;color:var(--muted);font-family:var(--mono)">' +
-        esc(f.downloaded_paths[f.downloaded_paths.length - 1].split(/[\\/]/).pop()) + "</span>";
+    if (f.kind === "video") {
+      const options = chQualityOptions(f), selected = chSelectedQuality(f, options, defaultQuality);
+      state.chQualities[f.feed_id] = selected;
+      action += '<select class="quality" aria-label="下载画质" data-ch-quality="' + esc(f.feed_id) + '"' +
+        (f.status === "downloading" ? " disabled" : "") + '>' + options.map(function (option) {
+          return '<option value="' + esc(option.value) + '"' + (option.value === selected ? " selected" : "") + '>' + esc(option.label) + '</option>';
+        }).join("") + '</select>';
     }
+    if (f.status !== "downloading" && (f.status !== "done" || f.kind === "video")) {
+      action += '<button class="btn mini" data-ch-download="' + esc(f.feed_id) + '">' +
+        (f.kind === "live" ? "录制" : f.status === "done" ? "重新下载" : "下载") + "</button>";
+    }
+    const saved = (Array.isArray(f.downloaded_paths) ? f.downloaded_paths : [])
+      .filter(function (path) { return typeof path === "string" && path; })
+      .map(chAbsoluteFilePath)
+      .map(function (path) {
+        const lastSeparator = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+        const directory = lastSeparator >= 0 ? path.slice(0, lastSeparator + 1) : "";
+        return '<div class="saved">文件地址<span class="file-path">' + esc(path) + '</span>' +
+          '<div class="file-actions"><button class="ghost mini btn" data-ch-copy="' + esc(path) + '">复制文件路径</button>' +
+          '<button class="ghost mini btn" data-ch-open="' + esc(directory) + '">打开文件夹</button></div></div>';
+      }).join("");
     const cover = f.cover_url
-      ? '<img src="' + esc(f.cover_url) + '" alt="" style="width:46px;height:46px;object-fit:cover;border-radius:6px;flex:none;background:#222">'
-      : '<div style="width:46px;height:46px;border-radius:6px;flex:none;background:#2a2a33;display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--muted)">' + kind + "</div>";
-    return '<div style="display:flex;gap:10px;align-items:center;padding:8px 2px;border-bottom:1px solid rgba(255,255,255,.06)">' +
-      cover +
-      '<div style="flex:1;min-width:0">' +
-        '<div style="font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(f.title || "(无标题)") + "</div>" +
-        '<div style="font-size:11px;color:var(--muted);margin-top:3px">' + esc(meta) +
-          (f.error ? ' <span style="color:var(--err)">· ' + esc(f.error.slice(0, 60)) + "</span>" : "") + "</div>" +
+      ? '<img class="cover" src="' + esc(f.cover_url) + '" alt="" loading="lazy">'
+      : '<div class="cover-ph">' + kind + "</div>";
+    return '<div class="feed-item">' + cover +
+      '<div class="body">' +
+        '<div class="t">' + esc(f.title || "(无标题)") + "</div>" +
+        '<div class="m">' + esc(meta) +
+          (f.error ? ' <span style="color:var(--err)">· ' + esc(f.error.slice(0, 60)) + "</span>" : "") + "</div>" + saved +
       "</div>" +
       badge +
-      '<div style="flex:none;min-width:60px;text-align:right">' + action + "</div>" +
+      '<div class="act">' + action + "</div>" +
     "</div>";
-  }).join("");
 }
+
+document.getElementById("chFeeds").addEventListener("change", function (evt) {
+  const select = evt.target.closest("select[data-ch-quality]");
+  if (select) {
+    state.chQualities[select.dataset.chQuality] = select.value;
+    state.chExplicitQualities[select.dataset.chQuality] = true;
+  }
+});
+document.getElementById("chFeeds").addEventListener("click", function (evt) {
+  const copyBtn = evt.target.closest("button[data-ch-copy]");
+  if (copyBtn) { copyText(copyBtn.dataset.chCopy, "已复制文件路径"); return; }
+  const openBtn = evt.target.closest("button[data-ch-open]");
+  if (openBtn) { openFolder(openBtn.dataset.chOpen); return; }
+  const button = evt.target.closest("button[data-ch-download]");
+  if (!button || button.disabled) return;
+  button.disabled = true;
+  chDownload(button.dataset.chDownload);
+});
 
 async function chDownload(feedId) {
   try {
-    await api("/api/v1/channels/feeds/" + encodeURIComponent(feedId) + "/download", { method: "POST" });
+    const quality = state.chQualities[feedId];
+    await api("/api/v1/channels/feeds/" + encodeURIComponent(feedId) + "/download", {
+      method: "POST", body: quality ? { quality: quality } : {}
+    });
     toast("已加入下载", "ok");
   } catch (err) { toast(err.message, "err"); }
   loadChannelsAll();
@@ -1652,7 +2270,7 @@ async function loadArchive() {
         "<td>" + esc(it.author_name || "—") + '</td><td class="mono">' + esc(fmtUnix(it.create_time)) + "</td>" +
         '<td class="mono">' + esc(fmtUnix(it.download_time)) + '</td><td class="mono"><span class="ellip" title="' +
         esc(it.file_path) + '">' + esc(it.file_path || "—") + "</span></td>" +
-        '<td><button class="btn ghost mini" data-copy="' + esc(link) + '">链接</button></td></tr>';
+        '<td><button class="ghost mini btn" data-copy="' + esc(link) + '">链接</button></td></tr>';
     }).join("") : '<tr><td colspan="7"><div class="empty">没有匹配记录</div></td></tr>';
 
     box.innerHTML = '<div class="kv"><span class="k">命中总数</span><span class="v">' + fmtNum(data.total) + "</span></div>" +
@@ -1660,8 +2278,8 @@ async function loadArchive() {
       '<th style="width:130px">作者</th><th style="width:150px">发布时间</th><th style="width:150px">下载时间</th>' +
       '<th>保存路径</th><th style="width:60px">操作</th></tr></thead><tbody>' + rows + "</tbody></table></div>" +
       '<div class="pager"><span>第 ' + data.page + " / " + state.archiveTotalPages + " 页</span>" +
-      '<button class="btn ghost mini" id="arPrev"' + (data.page <= 1 ? " disabled" : "") + ">上一页</button>" +
-      '<button class="btn ghost mini" id="arNext"' + (data.page >= state.archiveTotalPages ? " disabled" : "") + ">下一页</button></div>";
+      '<button class="ghost mini btn" id="arPrev"' + (data.page <= 1 ? " disabled" : "") + ">上一页</button>" +
+      '<button class="ghost mini btn" id="arNext"' + (data.page >= state.archiveTotalPages ? " disabled" : "") + ">下一页</button></div>";
 
     const prev = document.getElementById("arPrev");
     const next = document.getElementById("arNext");
@@ -1681,7 +2299,7 @@ document.getElementById("arResult").addEventListener("click", function (evt) {
 function settingsSchema() {
   return [
     { title: "基础", fields: [
-      { p: "path", t: "text", l: "下载目录" },
+      { p: "path", t: "dir", l: "下载目录" },
       { p: "thread", t: "number", l: "并发线程数" },
       { p: "rate_limit", t: "number", l: "限速（请求/秒）" },
       { p: "retry_times", t: "number", l: "失败重试次数" },
@@ -1703,6 +2321,9 @@ function settingsSchema() {
       { p: "video_quality", t: "select", l: "下载画质", opts: QUALITIES },
       { p: "start_time", t: "text", l: "起始日期（YYYY-MM-DD）" },
       { p: "end_time", t: "text", l: "结束日期（YYYY-MM-DD）" }
+    ] },
+    { title: "视频号画质", fields: [
+      { p: "channels.quality", t: "select", l: "视频号默认下载画质", opts: CHANNELS_QUALITIES }
     ] },
     { title: "增量下载", fields: [
       { p: "redownload_missing_files", t: "switch", l: "磁盘文件缺失时重新下载" },
@@ -1731,7 +2352,7 @@ function settingsSchema() {
     { title: "视频转写", fields: [
       { p: "transcript.enabled", t: "switch", l: "启用转写" },
       { p: "transcript.model", t: "text", l: "模型" },
-      { p: "transcript.output_dir", t: "text", l: "输出目录（留空 = 与视频同目录）" },
+      { p: "transcript.output_dir", t: "dir", l: "输出目录（留空 = 与视频同目录）" },
       { p: "transcript.api_url", t: "text", l: "接口地址" },
       { p: "transcript.api_key_env", t: "text", l: "密钥环境变量名" }
     ] },
@@ -1762,6 +2383,7 @@ async function loadConfig() {
     const data = await api("/api/v1/config");
     state.config = data.config;
     state.configMeta = data;
+    setConfigDirty(false);
     const crypto = data.config && data.config.cookies ? "（凭据已脱敏，不通过网页修改）" : "";
     document.getElementById("cfgPath").innerHTML =
       '<span class="k">配置文件路径</span><span class="v">' + esc(data.config_path || "未指定（仅内存生效）") + "</span>";
@@ -1775,8 +2397,9 @@ async function loadConfig() {
 function renderConfigForm() {
   const cfg = state.config || {};
   document.getElementById("cfgForm").innerHTML = settingsSchema().map(function (group) {
-    return '<div class="card"><h3>' + esc(group.title) + '</h3><div class="grid g3" style="margin-top:12px">' +
-      group.fields.map(function (f) { return renderField(f, cfg); }).join("") + "</div></div>";
+    const basic = ["基础", "下载内容", "默认下载范围"].includes(group.title);
+    return '<details class="card advanced"' + (basic ? " open" : "") + '><summary>' + esc(group.title) + '</summary><div class="advanced-body grid g3">' +
+      group.fields.map(function (f) { return renderField(f, cfg); }).join("") + "</div></details>";
   }).join("");
 }
 
@@ -1787,7 +2410,7 @@ function renderField(f, cfg) {
       (raw ? " checked" : "") + "><span>" + esc(f.l) + "</span></label>";
   }
   if (f.t === "select") {
-    return '<label class="field" style="margin:0"><span>' + esc(f.l) + "</span><select data-path=\"" + esc(f.p) + '" data-kind="select">' +
+    return '<label class="field" style="margin:0"><span>' + esc(f.l) + '</span><select data-path="' + esc(f.p) + '" data-kind="select">' +
       f.opts.map(function (o) {
         return '<option value="' + esc(o[0]) + '"' + (String(raw) === String(o[0]) ? " selected" : "") + ">" + esc(o[1]) + "</option>";
       }).join("") + "</select></label>";
@@ -1796,12 +2419,21 @@ function renderField(f, cfg) {
     const on = Array.isArray(raw) ? raw : [];
     return '<div style="grid-column:1/-1"><span style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">' + esc(f.l) + '</span><div class="chips" id="cfgModes">' +
       Object.keys(MODE_LABELS).map(function (m) {
-        return '<div class="chip' + (on.indexOf(m) >= 0 ? " on" : "") + '" data-cfgmode="' + m + '">' + esc(MODE_LABELS[m]) + "</div>";
+        return '<button type="button" class="chip' + (on.indexOf(m) >= 0 ? " on" : "") + '" aria-pressed="' + (on.indexOf(m) >= 0) + '" data-cfgmode="' + m + '">' + esc(MODE_LABELS[m]) + "</button>";
       }).join("") + "</div></div>";
   }
   if (f.t === "json") {
-    return '<label class="field" style="grid-column:1/-1;margin:0"><span>' + esc(f.l) + "</span><textarea rows=\"4\" data-path=\"" +
+    return '<label class="field" style="grid-column:1/-1;margin:0"><span>' + esc(f.l) + '</span><textarea rows="4" data-path="' +
       esc(f.p) + '" data-kind="json">' + esc(JSON.stringify(raw === undefined ? [] : raw, null, 2)) + "</textarea></label>";
+  }
+  if (f.t === "dir") {
+    // 目录字段：输入框右侧带「浏览…」按钮，点击弹出服务端目录选择器
+    const dirValue = raw === undefined || raw === null ? "" : raw;
+    return '<label class="field" style="margin:0"><span>' + esc(f.l) + "</span>" +
+      '<span style="display:flex;gap:8px">' +
+      '<input type="text" data-path="' + esc(f.p) + '" data-kind="text" value="' + esc(dirValue) + '" style="flex:1;min-width:0">' +
+      '<button type="button" class="ghost btn" data-browse="' + esc(f.p) + '" style="flex:none">浏览…</button>' +
+      "</span></label>";
   }
   const type = f.t === "number" ? "number" : "text";
   const value = raw === undefined || raw === null ? "" : raw;
@@ -1810,13 +2442,31 @@ function renderField(f, cfg) {
 }
 
 document.getElementById("cfgForm").addEventListener("click", function (evt) {
+  const browseBtn = evt.target.closest("button[data-browse]");
+  if (browseBtn) {
+    const input = document.querySelector('#cfgForm input[data-path="' + browseBtn.dataset.browse + '"]');
+    if (input) openDirModal(input);
+    return;
+  }
   const chip = evt.target.closest(".chip[data-cfgmode]");
   if (!chip) return;
   chip.classList.toggle("on");
+  chip.setAttribute("aria-pressed", chip.classList.contains("on"));
+  setConfigDirty(true);
 });
-document.getElementById("cfgReload").addEventListener("click", function () { state.config = null; loadConfig(); });
+function setConfigDirty(dirty) {
+  state.configDirty = dirty;
+  document.getElementById("cfgState").textContent = dirty ? "有未保存的改动" : "已与服务端同步";
+}
+document.getElementById("cfgForm").addEventListener("input", function () { setConfigDirty(true); });
+document.getElementById("cfgForm").addEventListener("change", function () { setConfigDirty(true); });
+document.getElementById("cfgReload").addEventListener("click", function () {
+  if (state.configDirty && !window.confirm("重新读取会丢弃尚未保存的修改，是否继续？")) return;
+  state.config = null; loadConfig();
+});
 
 document.getElementById("cfgSave").addEventListener("click", async function () {
+  if (!state.config) { toast("请等配置读取完成后再保存", "warn"); return; }
   const updates = {};
   const problems = [];
   const inputs = document.querySelectorAll("#cfgForm [data-path]");
@@ -1843,7 +2493,7 @@ document.getElementById("cfgSave").addEventListener("click", async function () {
   if (JSON.stringify(getPath(state.config, "mode")) !== JSON.stringify(modes)) updates.mode = modes;
 
   if (problems.length) { toast("校验未通过：" + problems.join("；"), "err"); return; }
-  if (!Object.keys(updates).length) { toast("没有需要保存的改动", "warn"); return; }
+  if (!Object.keys(updates).length) { setConfigDirty(false); toast("设置已与服务端一致，无需保存", "ok"); return; }
 
   const btn = this; btn.disabled = true; btn.textContent = "保存中…";
   try {
@@ -1858,9 +2508,135 @@ document.getElementById("cfgSave").addEventListener("click", async function () {
   btn.disabled = false; btn.textContent = "保存配置";
 });
 
+/* ============================ 目录选择弹层 ============================ */
+const dirModal = document.getElementById("dirModal");
+const dirPicker = { input: null, path: "", parent: null, sel: null };
+
+function openDirModal(input) {
+  dirPicker.input = input;
+  dirPicker.sel = null;
+  showModal(dirModal, "dirPathBox");
+  const initial = input.value.trim();
+  // 相对路径（如 ./Downloaded）没法直接浏览：回落到根层级（此电脑/盘符列表）
+  const isAbsolute = /^([a-zA-Z]:[\\/]|[\\/])/.test(initial);
+  loadDirList(isAbsolute ? initial : "");
+}
+function closeDirModal() { hideModal(dirModal); }
+
+function dirJoin(base, name) {
+  if (!base) return name;
+  const sep = base.indexOf("\\") >= 0 ? "\\" : "/";
+  return base.endsWith(sep) ? base + name : base + sep + name;
+}
+
+// 选中某个子目录时拼出最终路径；name 为空表示就选当前浏览的目录
+function dirPreview(name) {
+  return name ? dirJoin(dirPicker.path, name) : dirPicker.path;
+}
+
+async function loadDirList(path) {
+  document.getElementById("dirPick").disabled = true;
+  const list = document.getElementById("dirList");
+  list.innerHTML = '<div class="empty" style="padding:22px">读取中…</div>';
+  document.getElementById("dirCur").textContent = "";
+  try {
+    const data = await api("/api/v1/fs/dirs?path=" + encodeURIComponent(path || ""));
+    dirPicker.path = data.path || "";
+    // 注意：parent 为空字符串（此电脑层级）是有效值，不能用 || 兜底成 null
+    dirPicker.parent = data.parent === null || data.parent === undefined ? null : data.parent;
+    dirPicker.sel = null;
+    document.getElementById("dirPick").disabled = !!data.error || !dirPicker.path;
+    document.getElementById("dirPathBox").value = dirPicker.path;
+    // parent 为 null 才是真正没有上一级；空字符串表示回到「此电脑」层级
+    document.getElementById("dirUp").style.visibility = data.parent !== null ? "visible" : "hidden";
+    document.getElementById("dirCur").textContent = dirPicker.path || "此电脑（双击选择盘符）";
+    if (data.error) {
+      list.innerHTML = '<div class="empty" style="padding:22px;color:var(--warn)">' + esc(data.error) + "</div>";
+    } else if (!data.dirs.length) {
+      list.innerHTML = '<div class="empty" style="padding:22px">没有子目录</div>';
+    } else {
+      list.innerHTML = data.dirs.map(function (name) {
+        return '<button type="button" class="dir-item" style="width:100%;background:transparent;border-left:0;border-right:0;border-top:0;text-align:left" data-dir="' + esc(name) + '"><span class="dico">📁</span><span>' + esc(name) + "</span></button>";
+      }).join("");
+    }
+  } catch (err) {
+    list.innerHTML = '<div class="empty" style="padding:22px;color:var(--err)">' + esc(err.message) + "</div>";
+  }
+}
+
+document.getElementById("dirGo").addEventListener("click", function () {
+  loadDirList(document.getElementById("dirPathBox").value);
+});
+document.getElementById("dirPathBox").addEventListener("keydown", function (evt) {
+  if (evt.key === "Enter") { evt.preventDefault(); loadDirList(this.value); }
+});
+document.getElementById("dirUp").addEventListener("click", function () {
+  if (dirPicker.parent !== null) loadDirList(dirPicker.parent);
+});
+document.getElementById("dirList").addEventListener("click", function (evt) {
+  const item = evt.target.closest(".dir-item");
+  if (!item) return;
+  document.querySelectorAll("#dirList .dir-item.sel").forEach(function (el) { el.classList.remove("sel"); });
+  item.classList.add("sel");
+  dirPicker.sel = item.dataset.dir;
+  document.getElementById("dirPick").disabled = false;
+  document.getElementById("dirCur").textContent = dirPreview(dirPicker.sel);
+});
+document.getElementById("dirList").addEventListener("dblclick", function (evt) {
+  const item = evt.target.closest(".dir-item");
+  if (!item) return;
+  loadDirList(dirPreview(item.dataset.dir));
+});
+document.getElementById("dirModalClose").addEventListener("click", closeDirModal);
+dirModal.addEventListener("click", function (evt) { if (evt.target === dirModal) closeDirModal(); });
+document.getElementById("dirPick").addEventListener("click", function () {
+  const chosen = dirPreview(dirPicker.sel);
+  if (!chosen) { toast("请先选择一个目录", "warn"); return; }
+  if (dirPicker.input) { dirPicker.input.value = chosen; dirPicker.input.dispatchEvent(new Event("input", { bubbles: true })); }
+  closeDirModal();
+  toast("已填入「" + chosen + "」，点「保存配置」后生效", "ok");
+});
+
 /* ============================ 启动 ============================ */
+let modalReturnFocus = null;
+function showModal(modal, focusId) {
+  if (modal.classList.contains("open")) return;
+  modalReturnFocus = document.activeElement;
+  modal.classList.add("open");
+  document.querySelector(".layout").inert = true;
+  document.getElementById(focusId).focus();
+}
+function hideModal(modal) {
+  if (!modal.classList.contains("open")) return;
+  modal.classList.remove("open");
+  document.querySelector(".layout").inert = false;
+  if (modalReturnFocus) modalReturnFocus.focus();
+}
+document.addEventListener("keydown", function (evt) {
+  const modal = document.querySelector(".modal-mask.open");
+  if (modal) {
+    if (evt.key === "Escape") { evt.preventDefault(); hideModal(modal); }
+    if (evt.key === "Tab") {
+      const focusable = Array.from(modal.querySelectorAll("button:not(:disabled),input:not(:disabled),select,textarea,[tabindex='0']")).filter(function (el) { return el.offsetParent !== null; });
+      const first = focusable[0], last = focusable[focusable.length - 1];
+      if (evt.shiftKey && document.activeElement === first) { evt.preventDefault(); last.focus(); }
+      else if (!evt.shiftKey && document.activeElement === last) { evt.preventDefault(); first.focus(); }
+    }
+  } else if ((evt.ctrlKey || evt.metaKey) && evt.key === "Enter" && state.activeTab === "download") {
+    evt.preventDefault(); if (!document.getElementById("dlSubmit").disabled) document.getElementById("dlSubmit").click();
+  }
+});
+window.addEventListener("beforeunload", function (evt) { if (state.configDirty) { evt.preventDefault(); evt.returnValue = ""; } });
+function updateThemeButton() {
+  document.getElementById("themeToggle").textContent = document.documentElement.dataset.theme === "dark" ? "浅色模式" : "深色模式";
+}
+document.getElementById("themeToggle").addEventListener("click", function () {
+  const theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = theme; storageSet(localStorage, "dy_console_theme", theme); updateThemeButton();
+});
+updateThemeButton();
+document.querySelectorAll("#nav button[data-tab]").forEach(function (b) { b.title = b.textContent.trim(); });
 initDownloadTab();
-if (state.base) ping(); else ping();
 activateTab("overview");
 </script>
 </body>

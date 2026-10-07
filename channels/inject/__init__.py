@@ -31,6 +31,7 @@ ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 ASSET_FILES = (
     "channels.css",
     "cuin_core.js",
+    "media_source.js",
     "bootstrap.js",
     "channels_home.js",
     "channels_feed.js",

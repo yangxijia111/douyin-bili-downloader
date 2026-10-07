@@ -603,6 +603,37 @@ def test_real_ffmpeg_wraps_audio_only_into_m4a(tmp_path):
     assert target.stat().st_size > 0
 
 
+async def test_cancel_dash_merge_terminates_ffmpeg_and_discards_partial(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock, Mock
+
+    from bilibili.merger import merge_dash_streams
+
+    started = asyncio.Event()
+    process = Mock(returncode=None)
+    process.wait = AsyncMock()
+    target = tmp_path / "out.mp4"
+    partial = tmp_path / "out.mp4.part"
+
+    async def communicate():
+        partial.write_bytes(b"unfinished")
+        started.set()
+        await asyncio.Event().wait()
+
+    process.communicate = communicate
+    monkeypatch.setattr("bilibili.merger.asyncio.create_subprocess_exec", AsyncMock(return_value=process))
+    task = asyncio.create_task(merge_dash_streams(
+        tmp_path / "video.m4s", None, target, ffmpeg_path="fake-ffmpeg"
+    ))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    process.kill.assert_called_once()
+    process.wait.assert_awaited_once()
+    assert not partial.exists()
+    assert not target.exists()
+
+
 # ----------------------------------------------------------------------
 # 工具函数
 # ----------------------------------------------------------------------
